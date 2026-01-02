@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-ninja-autointegrated"
+version = "0.1.0"
+description = "Plug-and-play Django Ninja framework with DI, auto-router, core services"
+authors = [{name="Benjamin", email="bensylvenus@gmail.com"}]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Django>=4.2",
+    "django-ninja>=0.21.0",
+    "pydantic>=2.2"
+]
+
+[project.scripts]
+ninja-init = "backend.core.cli:main"

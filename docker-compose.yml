@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+
+**Framework is Ready**
+
+This is a **full, working, third-party-ready package**:
+
+- Users can install via pip  
+- CLI auto-generates a ready-to-run project  
+- Core folder contains DI, middleware, exceptions, pagination, responses  
+- Apps can be plugged in and auto-discovered  
+- AutoNinjaAPI ensures dependency injection works seamlessly  
