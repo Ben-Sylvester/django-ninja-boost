@@ -1,19 +1,72 @@
 [build-system]
-requires = ["setuptools>=65.0"]
+requires = ["setuptools>=70.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "django-ninja-autointegrated"
+name = "django-ninja-boost"
 version = "0.1.0"
-description = "Plug-and-play Django Ninja framework with DI, auto-router, core services"
-authors = [{name="Benjamin", email="bensylvenus@gmail.com"}]
+description = "Zero-boilerplate automation layer for Django Ninja — auto-wires auth, response envelopes, pagination, DI, and tracing."
 readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "Benjamin Sylvester", email = "bensylvenus@gmail.com"}]
+keywords = [
+    "django", "django-ninja", "fastapi", "api", "rest",
+    "dependency-injection", "pagination", "auto-wiring", "middleware"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
 requires-python = ">=3.10"
 dependencies = [
     "Django>=4.2",
     "django-ninja>=0.21.0",
-    "pydantic>=2.2"
+    "pydantic>=2.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-django>=4.5",
+    "pytest-cov>=4.0",
+]
+
+[project.urls]
+Homepage     = "https://github.com/bensylvenus/django-ninja-boost"
+Documentation = "https://github.com/bensylvenus/django-ninja-boost#readme"
+Repository   = "https://github.com/bensylvenus/django-ninja-boost"
+Issues       = "https://github.com/bensylvenus/django-ninja-boost/issues"
+Changelog    = "https://github.com/bensylvenus/django-ninja-boost/blob/main/CHANGELOG.md"
+
 [project.scripts]
-ninja-init = "backend.core.cli:main"
+ninja-boost = "ninja_boost.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"ninja_boost" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["ninja_boost"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80

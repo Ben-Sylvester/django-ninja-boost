@@ -1,0 +1,6 @@
+include LICENSE
+include README.md
+include pyproject.toml
+recursive-include src/ninja_boost *.py *.typed
+recursive-include template *.py *.txt *.ini *.md
+recursive-include tests *.py
