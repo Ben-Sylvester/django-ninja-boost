@@ -1,22 +1,20 @@
 """
 ninja_boost.api
 ~~~~~~~~~~~~~~~
-AutoAPI — a NinjaAPI subclass with auto-wired auth and response envelope.
+AutoAPI — a NinjaAPI subclass with auto-wired auth, response envelope,
+plugin lifecycle hooks, event dispatch, and docs hardening.
 
-How to integrate into an existing Django Ninja project
-------------------------------------------------------
-One-line change in your urls.py (or wherever you construct the API):
+Drop-in replacement for NinjaAPI::
 
-    # Before (vanilla Django Ninja):
+    # Before:
     from ninja import NinjaAPI
     api = NinjaAPI()
 
-    # After (with ninja_boost):
+    # After:
     from ninja_boost import AutoAPI
     api = AutoAPI()
 
-That's it. No other files change. AutoAPI is a drop-in subclass — every
-argument that NinjaAPI accepts still works::
+Every argument NinjaAPI accepts still works::
 
     api = AutoAPI(
         title="Bookstore API",
@@ -25,42 +23,63 @@ argument that NinjaAPI accepts still works::
     )
 
 What AutoAPI adds automatically
---------------------------------
+---------------------------------
 1. Default auth from ``settings.NINJA_BOOST["AUTH"]``
-   (overridable per-route with ``auth=MyAuth()`` or ``auth=None``)
-
-2. Response envelope on every successful response:
-   ``{"ok": True, "data": <your return value>}``
-
-3. Error responses from exception handlers are never double-wrapped.
-   They check for the "ok" key and pass through as-is.
+2. Response envelope: ``{"ok": True, "data": <payload>}``
+3. Double-wrap prevention on error responses
+4. Plugin lifecycle hooks fired on startup
+5. Docs access hardening (if ``settings.NINJA_BOOST["DOCS"]`` is configured)
 """
 
+import logging
 from typing import Any
+
 from ninja import NinjaAPI
 from ninja_boost.conf import boost_settings
+
+logger = logging.getLogger("ninja_boost.api")
 
 
 class AutoAPI(NinjaAPI):
     """
-    Drop-in NinjaAPI subclass with auto-wired auth + response envelope.
-
-    Parameters match NinjaAPI exactly — add ``title``, ``version``, ``docs``,
-    ``urls_namespace``, etc. as needed.
+    Drop-in NinjaAPI subclass with auto-wired auth, response envelope,
+    plugin hooks, and event dispatch.
     """
 
     def __init__(self, *args, **kwargs):
+        # ── Auth ──────────────────────────────────────────────────────────
         if "auth" not in kwargs:
             auth_class = boost_settings.AUTH
             kwargs["auth"] = auth_class()
+
         super().__init__(*args, **kwargs)
+
+        # ── Notify plugins of new API instance ────────────────────────────
+        try:
+            from ninja_boost.plugins import plugin_registry
+            plugin_registry.fire_startup(self)
+        except Exception:
+            logger.exception("Plugin startup hooks raised")
+
+        # ── Docs hardening ────────────────────────────────────────────────
+        try:
+            from django.conf import settings as djsettings
+            cfg = getattr(djsettings, "NINJA_BOOST", {})
+            if "DOCS" in cfg:
+                from ninja_boost.docs import harden_docs
+                harden_docs(self)
+        except Exception:
+            logger.debug("Docs hardening skipped (Django not configured)", exc_info=True)
+
+        logger.debug("AutoAPI initialised: title=%r version=%r",
+                     getattr(self, "title", None), getattr(self, "version", None))
 
     def create_response(self, request, data: Any, *args, **kwargs):
         """
-        Wrap data in the response envelope unless it's already an envelope.
+        Wrap *data* in the response envelope unless it is already wrapped.
 
-        Already-wrapped dicts (those containing the ``"ok"`` key, e.g. from
-        exception handlers) are passed through untouched to prevent double-wrapping.
+        Error envelopes from exception handlers contain ``"ok"`` already —
+        they are passed through as-is to prevent double-wrapping.
         """
         if not isinstance(data, dict) or "ok" not in data:
             data = boost_settings.RESPONSE_WRAPPER(data)

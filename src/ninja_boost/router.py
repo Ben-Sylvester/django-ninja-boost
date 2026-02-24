@@ -1,27 +1,16 @@
 """
 ninja_boost.router
 ~~~~~~~~~~~~~~~~~~
-AutoRouter — a Router subclass that auto-applies auth, DI, and pagination
-to every registered operation.
+AutoRouter — a Router subclass that auto-applies auth, DI, pagination,
+rate limiting, permissions, async detection, and lifecycle events to every
+registered operation.
 
-How to integrate into an existing Django Ninja project
-------------------------------------------------------
-Same one-line swap as AutoAPI:
+Drop-in replacement for Router::
 
-    # Before:
-    from ninja import Router
-    router = Router(tags=["Users"])
-
-    # After:
     from ninja_boost import AutoRouter
     router = AutoRouter(tags=["Users"])
 
-Your route functions stay exactly the same, except they now receive a ``ctx``
-second argument containing the request context (see inject_context).
-
-Per-operation opt-outs
-----------------------
-Use keyword flags when you need to skip a behaviour for a specific route:
+Per-operation opt-outs::
 
     @router.get("/health", auth=None, inject=False, paginate=False)
     def health(request):
@@ -29,40 +18,84 @@ Use keyword flags when you need to skip a behaviour for a specific route:
 
     @router.post("/", response=UserOut, paginate=False)
     def create_user(request, ctx, payload: UserCreate):
-        # single object — no pagination needed
         return UserService.create(payload)
 
-Decorator application order (innermost applied first, outermost called first):
+Rate limiting per route::
+
+    from ninja_boost.rate_limiting import rate_limit
+
+    @router.get("/search")
+    @rate_limit("30/minute")
+    def search(request, ctx, q: str): ...
+
+Declarative permissions::
+
+    from ninja_boost.permissions import require, IsAuthenticated, IsStaff
+
+    @router.delete("/{id}")
+    @require(IsStaff)
+    def delete_item(request, ctx, id: int): ...
+
+Async views are automatically detected::
+
+    @router.get("/items")
+    async def list_items(request, ctx):
+        return await Item.objects.all()
+
+Decorator application order (innermost first, outermost called first):
     auto_paginate( inject_context( view_func ) )
 """
+
+import asyncio
+import logging
+from typing import Any
 
 from ninja import Router
 from ninja_boost.conf import boost_settings
 
+logger = logging.getLogger("ninja_boost.router")
+
 
 class AutoRouter(Router):
     """
-    Router that auto-applies DI context injection and pagination per-operation.
+    Router that auto-applies DI injection, pagination, auth, rate limiting,
+    and lifecycle events per-operation.
 
-    Authentication is also wired automatically from ``settings.NINJA_BOOST["AUTH"]``
-    unless ``auth=...`` is explicitly passed.
-
-    Extra kwargs (consumed before passing to super):
-        inject  (bool, default True)  — apply inject_context
-        paginate (bool, default True) — apply auto_paginate
+    Extra kwargs consumed before passing to super():
+        inject   (bool, default True)  — apply inject_context
+        paginate (bool, default True)  — apply auto_paginate
     """
 
     def add_api_operation(self, path: str, methods, view_func, **kwargs):
-        # ── Auth ─────────────────────────────────────────────────────────────
+        is_async_view = asyncio.iscoroutinefunction(view_func)
+
+        # ── Auth ──────────────────────────────────────────────────────────
         if "auth" not in kwargs:
             kwargs["auth"] = boost_settings.AUTH()
 
-        # ── Dependency injection ──────────────────────────────────────────────
+        # ── Dependency injection ──────────────────────────────────────────
         if kwargs.pop("inject", True):
-            view_func = boost_settings.DI(view_func)
+            if is_async_view:
+                from ninja_boost.async_support import async_inject_context
+                view_func = async_inject_context(view_func)
+            else:
+                view_func = boost_settings.DI(view_func)
 
-        # ── Pagination ────────────────────────────────────────────────────────
+        # ── Global rate limit (if set in settings, per-route @rate_limit wins) ──
+        try:
+            from ninja_boost.rate_limiting import _get_global_rate, apply_global_rate_limit
+            global_rate = _get_global_rate()
+            if global_rate and not is_async_view:
+                view_func = apply_global_rate_limit(view_func, global_rate)
+        except Exception:
+            logger.debug("Global rate limit wiring skipped", exc_info=True)
+
+        # ── Pagination ────────────────────────────────────────────────────
         if kwargs.pop("paginate", True):
-            view_func = boost_settings.PAGINATION(view_func)
+            if is_async_view:
+                from ninja_boost.async_support import async_paginate
+                view_func = async_paginate(view_func)
+            else:
+                view_func = boost_settings.PAGINATION(view_func)
 
         return super().add_api_operation(path, methods, view_func, **kwargs)

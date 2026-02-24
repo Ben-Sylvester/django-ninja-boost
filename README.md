@@ -1,13 +1,15 @@
 # django-ninja-boost
 
-**The automation layer Django Ninja was always missing.**  
-Auto-wires authentication, response envelopes, pagination, request-context injection, and distributed tracing — configure once, write APIs forever.
+**The production automation layer Django Ninja was always missing.**
+
+Auto-wires everything a real API needs — auth, envelopes, pagination, DI, rate limiting, permissions, policies, services, events, async, structured logging, metrics, health checks, caching, versioning, and docs hardening — configure once, build forever.
 
 [![PyPI version](https://img.shields.io/pypi/v/django-ninja-boost.svg)](https://pypi.org/project/django-ninja-boost/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)](https://djangoproject.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://github.com/bensylvenus/django-ninja-boost/actions/workflows/test.yml/badge.svg)](https://github.com/bensylvenus/django-ninja-boost/actions)
+[![Coverage](https://img.shields.io/badge/coverage-90%25+-brightgreen.svg)](https://github.com/bensylvenus/django-ninja-boost/actions)
 
 ---
 
@@ -15,754 +17,472 @@ Auto-wires authentication, response envelopes, pagination, request-context injec
 
 - [What is this?](#what-is-this)
 - [The problem it solves](#the-problem-it-solves)
-- [Prerequisites](#prerequisites)
+- [Feature overview](#feature-overview)
 - [Installation](#installation)
-- [5-Minute Quick Start](#5-minute-quick-start)
+- [Quick Start (5 minutes)](#quick-start-5-minutes)
 - [Adding to an existing project](#adding-to-an-existing-project)
-- [Complete project walkthrough](#complete-project-walkthrough)
 - [Feature reference](#feature-reference)
-  - [AutoAPI](#autoapi--response-envelope)
-  - [AutoRouter](#autorouter--auth--di--pagination)
+  - [AutoAPI — response envelope + auth](#autoapi--response-envelope--auth)
+  - [AutoRouter — DI + pagination + auth](#autorouter--di--pagination--auth)
   - [Context injection (ctx)](#context-injection-ctx)
   - [Auto-pagination](#auto-pagination)
-  - [Tracing middleware](#tracing-middleware)
+  - [TracingMiddleware](#tracingmiddleware)
   - [Exception handlers](#exception-handlers)
+  - [Event bus](#event-bus)
+  - [Plugin system](#plugin-system)
+  - [Rate limiting](#rate-limiting)
+  - [Declarative permissions](#declarative-permissions)
+  - [Policy registry](#policy-registry)
+  - [Service registry (DI container)](#service-registry-di-container)
+  - [Structured logging](#structured-logging)
+  - [Metrics hooks](#metrics-hooks)
+  - [Async support](#async-support)
+  - [Lifecycle middleware](#lifecycle-middleware)
+  - [Health checks](#health-checks)
+  - [Response caching](#response-caching)
+  - [API versioning](#api-versioning)
+  - [Docs hardening](#docs-hardening)
 - [Configuration reference](#configuration-reference)
-- [Per-route opt-out flags](#per-route-opt-out-flags)
 - [Custom integrations](#custom-integrations)
-  - [Custom auth (JWT)](#custom-auth-jwt)
-  - [Django session auth](#django-session-auth)
-  - [API key auth](#api-key-auth)
-  - [Custom response envelope](#custom-response-envelope)
-  - [Custom pagination (cursor-based)](#custom-pagination-cursor-based)
-  - [Custom DI context](#custom-di-context)
 - [Real-world patterns](#real-world-patterns)
-  - [Role-based access control](#role-based-access-control)
-  - [Multi-tenant APIs](#multi-tenant-apis)
-  - [File uploads](#file-uploads)
-  - [Multiple API versions](#multiple-api-versions)
-  - [Background tasks](#background-tasks)
 - [Testing](#testing)
 - [Deployment](#deployment)
-  - [Environment variables](#environment-variables)
-  - [Production settings](#production-settings)
-  - [Docker](#docker)
 - [CLI reference](#cli-reference)
 - [Security considerations](#security-considerations)
 - [Performance notes](#performance-notes)
 - [Troubleshooting & FAQ](#troubleshooting--faq)
-- [How it relates to Django Ninja](#how-it-relates-to-django-ninja)
 - [Comparison table](#comparison-table)
-- [Project structure](#project-structure)
-- [Contributing](#contributing)
 - [Changelog](#changelog)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
 
 ## What is this?
 
-**django-ninja-boost** is an extension library that sits on top of [Django Ninja](https://django-ninja.dev/) and eliminates the repetitive boilerplate every team writes when building production APIs:
+**django-ninja-boost** is a zero-configuration automation layer that sits on top of [Django Ninja](https://django-ninja.dev/) and eliminates every piece of repetitive boilerplate a production API team writes.
 
-- It does **not** replace Django Ninja — it extends it with two drop-in subclasses
-- Configure once in `settings.py` and every router inherits auth, pagination, and DI automatically
-- Every existing Django Ninja feature (schemas, TestClient, OpenAPI docs, Router args) still works unchanged
-- You can migrate one router at a time — your un-migrated routes keep working as normal
+It does **not** replace Django Ninja — it extends it. Every argument NinjaAPI and Router accept still works. You can migrate one router at a time. Un-migrated routes keep working.
 
-Think of it as the difference between vanilla Django and Django REST Framework — same foundation, dramatically less manual wiring.
+```python
+# Before: repeated ceremony on every router
+from ninja import NinjaAPI, Router
+from ninja.security import HttpBearer
+
+class JWTAuth(HttpBearer):
+    def authenticate(self, request, token): ...   # copied into every project
+
+router = Router()
+
+@router.get("/users", auth=JWTAuth())
+def list_users(request):
+    page  = int(request.GET.get("page", 1))       # manually paginated
+    size  = int(request.GET.get("size", 20))       # every time
+    start = (page - 1) * size
+    total = User.objects.count()
+    data  = list(User.objects.all()[start:start+size])
+    return {"items": data, "total": total, "page": page, "size": size, "pages": ...}
+
+
+# After: declare once, works everywhere
+from ninja_boost import AutoAPI, AutoRouter
+
+api    = AutoAPI()
+router = AutoRouter(tags=["Users"])
+
+@router.get("/users")
+def list_users(request, ctx):                     # ctx injected: user, ip, trace_id
+    return User.objects.all()                     # auto-paginated, auto-wrapped
+```
 
 ---
 
 ## The problem it solves
 
-Every endpoint in a vanilla Django Ninja project requires this same ceremony:
+Every real-world Django Ninja project re-implements the same cross-cutting concerns:
 
-```python
-# Repeated. On every. Single. Router. File.
-from ninja import Router
-from ninja.security import HttpBearer
-
-class JWTAuth(HttpBearer):
-    def authenticate(self, request, token):
-        ...  # same code copied into every project
-
-router = Router()
-
-@router.get("/users", auth=JWTAuth(), response=list[UserOut])
-def list_users(request):
-    user  = request.auth                         # manually unpack auth
-    ip    = request.META.get("REMOTE_ADDR")      # manually get IP
-    qs    = User.objects.all()
-    page  = int(request.GET.get("page", 1))      # manually paginate
-    size  = int(request.GET.get("size", 20))
-    start = (page - 1) * size
-    data  = list(qs[start:start + size])
-    total = qs.count()
-    return {                                      # manually shape every response
-        "ok":    True,
-        "data":  data,
-        "page":  page,
-        "size":  size,
-        "total": total,
-    }
-```
-
-With `django-ninja-boost`, configure it once and write only this:
-
-```python
-from ninja_boost import AutoRouter
-
-router = AutoRouter()
-
-@router.get("/users", response=list[UserOut])
-def list_users(request, ctx):
-    return User.objects.all()
-    # ↑ auth ✓  pagination ✓  response shape ✓  IP ✓  tracing ✓  all automatic
-```
-
-Same API. Same behaviour. Zero repetition.
+| Concern | Without ninja-boost | With ninja-boost |
+|---------|--------------------|--------------------|
+| Auth | Copy auth class to every project | Declare once in `settings.py` |
+| Response shape | `{"ok": True, "data": result}` by hand | Automatic |
+| Pagination | 6 lines per list endpoint | Auto-applied, opt-out per route |
+| Request context | `request.auth`, `request.META["REMOTE_ADDR"]`, `request.trace_id` | `ctx["user"]`, `ctx["ip"]`, `ctx["trace_id"]` |
+| Rate limiting | Third-party package, 20 lines per route | `@rate_limit("100/hour")` |
+| Permissions | Inline `if not user.is_staff: raise` | `@require(IsStaff)` |
+| Policies | Scattered per-view logic | `policy_registry.authorize(req, ctx, "order", "update", obj=o)` |
+| Event hooks | Monkey-patching | `@event_bus.on("before_request")` |
+| Structured logging | Custom formatter wired manually | One LOGGING entry |
+| Metrics | SDK-specific setup per project | `@track("my_op")` or backend config |
+| Health checks | DIY | `api.add_router("/health", health_router)` |
+| Caching | Manual cache key management | `@cache_response(ttl=60)` |
 
 ---
 
-## Prerequisites
+## Feature overview
 
-Before installing, make sure you have:
+**v0.2.0 — 26 modules**
 
-- **Python 3.10 or higher** — check with `python --version`
-- **Django 4.2 or higher** — check with `python -m django --version`
-- **django-ninja 0.21.0 or higher** — check with `pip show django-ninja`
-- **pydantic 2.2 or higher** — installed automatically with django-ninja
-
-If you are new to Django Ninja, read their [5-minute tutorial](https://django-ninja.dev/tutorial/) first. `ninja_boost` builds directly on top of it and assumes you understand `NinjaAPI`, `Router`, and Schemas.
+| # | Module | What it does |
+|---|--------|-------------|
+| 1 | `AutoAPI` | NinjaAPI subclass: default auth, response envelope, plugin startup |
+| 2 | `AutoRouter` | Router subclass: auth, DI, pagination, global rate limit per-operation |
+| 3 | `events` | Pub/sub event bus with sync + async dispatch, 9 built-in events |
+| 4 | `plugins` | Plugin base class + registry, auto-wired to event bus |
+| 5 | `rate_limiting` | `@rate_limit("N/period")`, in-memory + cache backends |
+| 6 | `permissions` | `@require(IsStaff)`, composable with `&` `\|` `~` |
+| 7 | `policies` | Resource policy registry, `@policy("order", "delete")` |
+| 8 | `services` | Service DI container, singleton + scoped, `ctx["services"]` |
+| 9 | `logging_structured` | JSON log formatter, request context auto-binding, access log |
+| 10 | `metrics` | Prometheus / StatsD / logging backends, `@track`, active-request gauge |
+| 11 | `async_support` | Async DI, async pagination, async rate limit, async permissions |
+| 12 | `lifecycle` | `LifecycleMiddleware` — single point for all request/response hooks |
+| 13 | `health` | `GET /health/live` + `/health/ready`, k8s-compatible, custom checks |
+| 14 | `caching` | `@cache_response(ttl=60, key="user")`, `CacheManager` |
+| 15 | `versioning` | `VersionedRouter`, `@deprecated`, `@require_version`, `versioned_api()` |
+| 16 | `docs` | IP allowlist, staff-only docs, disable in production, security schemes |
+| 17 | `dependencies` | `inject_context` — the `ctx` injection decorator |
+| 18 | `pagination` | `auto_paginate` — transparent page/size pagination for lists + QuerySets |
+| 19 | `middleware` | `TracingMiddleware` — UUID trace ID + X-Trace-Id header |
+| 20 | `exceptions` | `register_exception_handlers` — standard error envelopes |
+| 21 | `responses` | `wrap_response` — `{"ok": True, "data": ...}` |
+| 22 | `conf` | `BoostSettings` — lazy settings proxy with defaults |
+| 23 | `apps` | `NinjaBoostConfig` — auto-loads plugins, policies, services on startup |
+| 24 | `integrations` | `BearerTokenAuth` — demo auth backend |
+| 25 | `cli` | `ninja-boost startproject / startapp / config` |
 
 ---
 
 ## Installation
 
 ```bash
-pip install django-ninja django-ninja-boost
+pip install django-ninja-boost
 ```
 
-Both packages are needed. `django-ninja` is a peer dependency — `ninja_boost` extends it, not replaces it.
-
-Verify the installation:
+Optional backends:
 
 ```bash
-python -c "import ninja_boost; print(ninja_boost.__version__)"
-# 0.1.0
+pip install "django-ninja-boost[prometheus]"   # Prometheus metrics
+pip install "django-ninja-boost[statsd]"       # StatsD metrics
+pip install "django-ninja-boost[redis]"        # Redis rate limiting + caching
+pip install "django-ninja-boost[all]"          # Everything
+```
 
-ninja-boost --help
-# usage: ninja-boost [-h] {startproject,startapp,config} ...
+Add to `INSTALLED_APPS`:
+
+```python
+INSTALLED_APPS = [
+    ...
+    "ninja_boost",
+]
 ```
 
 ---
 
-## 5-Minute Quick Start
+## Quick Start (5 minutes)
 
-The fastest way to see everything working:
+### Option A — Scaffold a new project
 
 ```bash
-# 1. Install
-pip install django-ninja django-ninja-boost
-
-# 2. Scaffold a complete project
+pip install django-ninja-boost
 ninja-boost startproject myapi
-
-# 3. Install project dependencies
-cd myapi && pip install -r requirements.txt
-
-# 4. Run migrations (creates Django auth tables)
+cd myapi
+pip install -r requirements.txt
 python manage.py migrate
-
-# 5. Start the dev server
 python manage.py runserver
 ```
 
-Open your browser:
+This creates a complete, runnable project. Open `http://localhost:8000/api/docs` to see the interactive docs.
 
-- **Interactive Swagger docs:** [http://localhost:8000/api/docs](http://localhost:8000/api/docs)
-- **OpenAPI JSON:** [http://localhost:8000/api/openapi.json](http://localhost:8000/api/openapi.json)
+### Option B — Manual setup
 
-Test with curl (the scaffolded project uses a demo bearer token):
+**1. settings.py**
 
-```bash
-# Without auth — returns 401
-curl http://localhost:8000/api/users/
+```python
+INSTALLED_APPS = [
+    ...
+    "ninja_boost",
+]
 
-# With the demo token — returns paginated response
-curl -H "Authorization: Bearer demo" http://localhost:8000/api/users/
-# {"ok": true, "data": {"items": [], "page": 1, "size": 20, "total": 0, "pages": 1}}
+MIDDLEWARE = [
+    ...
+    "ninja_boost.middleware.TracingMiddleware",       # adds trace_id to every request
+    "ninja_boost.lifecycle.LifecycleMiddleware",     # fires before/after events
+]
+
+NINJA_BOOST = {
+    "AUTH":             "myproject.auth.JWTAuth",    # your auth class
+    "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
+    "PAGINATION":       "ninja_boost.pagination.auto_paginate",
+    "DI":               "ninja_boost.dependencies.inject_context",
+}
 ```
 
-Everything is working. Now scaffold your first real app:
+**2. urls.py**
 
-```bash
-ninja-boost startapp products
+```python
+from django.urls import path
+from ninja_boost import AutoAPI
+from ninja_boost.exceptions import register_exception_handlers
+from ninja_boost.health import health_router
+
+api = AutoAPI(title="My API", version="1.0")
+register_exception_handlers(api)
+api.add_router("/health", health_router)
+
+from apps.users.routers import router as users_router
+api.add_router("/users", users_router)
+
+urlpatterns = [
+    path("api/", api.urls),
+]
 ```
+
+**3. apps/users/routers.py**
+
+```python
+from ninja_boost import AutoRouter
+from .schemas import UserOut, UserCreate
+from .services import UserService
+
+router = AutoRouter(tags=["Users"])
+
+@router.get("/", response=list[UserOut])
+def list_users(request, ctx):
+    return UserService.all()          # auto-paginated
+
+@router.get("/{id}", response=UserOut)
+def get_user(request, ctx, id: int):
+    return UserService.get(id)
+
+@router.post("/", response=UserOut, paginate=False)
+def create_user(request, ctx, payload: UserCreate):
+    return UserService.create(payload)
+```
+
+That's it. You now have auth, pagination, response envelopes, tracing, and structured logging — with zero per-route boilerplate.
 
 ---
 
 ## Adding to an existing project
 
-Already have a Django Ninja project? This is a **3-step migration**. None of your existing routes break — you can migrate one router at a time.
-
-### Step 1 — Register in settings.py
+ninja-boost is designed for incremental adoption. You can migrate one router at a time without touching any other code.
 
 ```python
-INSTALLED_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    # ... your existing apps ...
-    "ninja_boost",          # ← add
-]
-
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    # ... your existing middleware ...
-    "ninja_boost.middleware.TracingMiddleware",   # ← add (optional, recommended)
-]
-
-# All four keys are optional — built-in defaults are used for anything omitted
-NINJA_BOOST = {
-    "AUTH":             "ninja_boost.integrations.BearerTokenAuth",  # replace with your real auth
-    "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
-    "PAGINATION":       "ninja_boost.pagination.auto_paginate",
-    "DI":               "ninja_boost.dependencies.inject_context",
-}
-```
-
-### Step 2 — Swap NinjaAPI → AutoAPI in urls.py
-
-```python
-# Before:
-from ninja import NinjaAPI
-api = NinjaAPI()
-
-# After — one import, one class name:
-from ninja_boost import AutoAPI
-from ninja_boost.exceptions import register_exception_handlers
-
-api = AutoAPI(title="My API", version="1.0")   # all NinjaAPI args still work
-register_exception_handlers(api)
-
-# Everything else stays the same:
-from apps.users.routers import router as users_router
-api.add_router("/users", users_router)
-
-urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("api/",   api.urls),
-]
-```
-
-### Step 3 — Swap Router → AutoRouter in your app files
-
-```python
-# Before:
+# Before
 from ninja import Router
-router = Router(tags=["Users"])
+router = Router()
 
-# After:
+@router.get("/items", auth=JWTAuth())
+def list_items(request): ...
+
+
+# After — only change the import and class name
 from ninja_boost import AutoRouter
-router = AutoRouter(tags=["Users"])
+router = AutoRouter()
 
-# Your routes stay the same — except they now receive ctx automatically:
-@router.get("/", response=list[UserOut])
-def list_users(request, ctx):     # ← add ctx as second argument
-    return UserService.list_users()
+@router.get("/items")
+def list_items(request, ctx):   # add ctx param; auth now auto-wired
+    ...
 ```
 
-That's it. Routers you haven't migrated yet continue working exactly as before.
-
----
-
-## Complete project walkthrough
-
-This section builds a real bookstore API end-to-end so you can see how all pieces fit together.
-
-### Project layout
-
-```
-bookstore/
-├── manage.py
-├── requirements.txt
-├── bookstore/              ← Django project package
-│   ├── settings.py
-│   ├── urls.py
-│   ├── wsgi.py
-│   └── asgi.py
-└── apps/
-    ├── __init__.py
-    └── books/
-        ├── __init__.py
-        ├── apps.py
-        ├── models.py
-        ├── schemas.py      ← Pydantic input/output shapes
-        ├── services.py     ← business logic (no HTTP here)
-        ├── routers.py      ← HTTP route definitions
-        └── migrations/
-            └── __init__.py
-```
-
-### models.py
-
-```python
-from django.db import models
-
-class Book(models.Model):
-    title     = models.CharField(max_length=255)
-    author    = models.CharField(max_length=255)
-    isbn      = models.CharField(max_length=13, unique=True)
-    price     = models.DecimalField(max_digits=8, decimal_places=2)
-    published = models.DateField()
-    in_stock  = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ["title"]
-```
-
-### schemas.py
-
-Schemas define what goes in and what comes out of your API. Pure Pydantic — nothing boost-specific here.
-
-```python
-from ninja import Schema
-from datetime import date
-from decimal import Decimal
-from typing import Optional
-
-class BookOut(Schema):
-    id:        int
-    title:     str
-    author:    str
-    isbn:      str
-    price:     Decimal
-    published: date
-    in_stock:  bool
-
-class BookCreate(Schema):
-    title:     str
-    author:    str
-    isbn:      str
-    price:     Decimal
-    published: date
-
-class BookUpdate(Schema):
-    title:    Optional[str]     = None
-    author:   Optional[str]     = None
-    price:    Optional[Decimal] = None
-    in_stock: Optional[bool]    = None
-
-class BookFilters(Schema):
-    author:   Optional[str]  = None
-    in_stock: Optional[bool] = None
-```
-
-### services.py
-
-Services contain all business logic and database access. They have no knowledge of HTTP — easy to test, easy to reuse from CLI commands or background tasks.
-
-```python
-from django.shortcuts import get_object_or_404
-from .models import Book
-from .schemas import BookCreate, BookUpdate, BookOut, BookFilters
-
-class BookService:
-
-    @staticmethod
-    def list_books(filters: BookFilters):
-        """
-        Return a filtered QuerySet.
-
-        Returning a QuerySet (not list()) lets auto_paginate use efficient
-        .count() + LIMIT/OFFSET instead of loading the whole table first.
-        """
-        qs = Book.objects.all()
-        if filters.author:
-            qs = qs.filter(author__icontains=filters.author)
-        if filters.in_stock is not None:
-            qs = qs.filter(in_stock=filters.in_stock)
-        return qs
-
-    @staticmethod
-    def get_book(book_id: int) -> BookOut:
-        book = get_object_or_404(Book, id=book_id)
-        return BookOut.from_orm(book)
-
-    @staticmethod
-    def create_book(data: BookCreate) -> BookOut:
-        book = Book.objects.create(**data.dict())
-        return BookOut.from_orm(book)
-
-    @staticmethod
-    def update_book(book_id: int, data: BookUpdate) -> BookOut:
-        book = get_object_or_404(Book, id=book_id)
-        for field, value in data.dict(exclude_none=True).items():
-            setattr(book, field, value)
-        book.save()
-        return BookOut.from_orm(book)
-
-    @staticmethod
-    def delete_book(book_id: int) -> None:
-        get_object_or_404(Book, id=book_id).delete()
-```
-
-### routers.py
-
-This is where `ninja_boost` shines — clean HTTP wiring with zero boilerplate:
-
-```python
-from ninja import Query
-from ninja.errors import HttpError
-from ninja_boost import AutoRouter
-from .schemas import BookOut, BookCreate, BookUpdate, BookFilters
-from .services import BookService
-
-router = AutoRouter(tags=["Books"])
-
-
-@router.get("/", response=list[BookOut])
-def list_books(request, ctx, filters: BookFilters = Query(...)):
-    """
-    List all books with optional filters.
-
-    Everything below is automatic — no code needed:
-      - Auth enforced (from NINJA_BOOST["AUTH"])
-      - ctx injected: ctx["user"], ctx["ip"], ctx["trace_id"]
-      - Paginated: client sends ?page=2&size=10
-      - Response wrapped: {"ok": true, "data": {"items": [...], ...}}
-    """
-    return BookService.list_books(filters)
-
-
-@router.get("/{book_id}", response=BookOut, paginate=False)
-def get_book(request, ctx, book_id: int):
-    """Single object — paginate=False because we don't return a list."""
-    return BookService.get_book(book_id)
-
-
-@router.post("/", response=BookOut, paginate=False)
-def create_book(request, ctx, payload: BookCreate):
-    """ctx["user"] holds whatever your AUTH backend returned."""
-    return BookService.create_book(payload)
-
-
-@router.patch("/{book_id}", response=BookOut, paginate=False)
-def update_book(request, ctx, book_id: int, payload: BookUpdate):
-    """Partial update — only send the fields you want to change."""
-    return BookService.update_book(book_id, payload)
-
-
-@router.delete("/{book_id}", paginate=False)
-def delete_book(request, ctx, book_id: int):
-    BookService.delete_book(book_id)
-    return None
-
-
-@router.get("/featured", response=list[BookOut], auth=None)
-def featured_books(request):
-    """
-    Public endpoint — auth=None disables authentication.
-    inject=False is also an option if you don't need ctx here.
-    """
-    return Book.objects.filter(in_stock=True).order_by("-published")[:5]
-```
-
-### settings.py
-
-```python
-from pathlib import Path
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = "your-secret-key-here"   # use env var in production
-DEBUG = True
-ALLOWED_HOSTS = ["*"]
-
-INSTALLED_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
-    "ninja_boost",
-    "apps.books",
-]
-
-MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "ninja_boost.middleware.TracingMiddleware",
-]
-
-NINJA_BOOST = {
-    "AUTH":             "bookstore.auth.JWTAuth",
-    "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
-    "PAGINATION":       "ninja_boost.pagination.auto_paginate",
-    "DI":               "ninja_boost.dependencies.inject_context",
-}
-
-ROOT_URLCONF = "bookstore.urls"
-DATABASES = {
-    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}
-}
-USE_TZ = True
-```
-
-### urls.py
-
-```python
-from django.contrib import admin
-from django.urls import path
-from ninja_boost import AutoAPI
-from ninja_boost.exceptions import register_exception_handlers
-from apps.books.routers import router as books_router
-
-api = AutoAPI(
-    title="Bookstore API",
-    version="1.0",
-    description="Sample API built with django-ninja-boost",
-)
-register_exception_handlers(api)
-api.add_router("/books", books_router)
-
-urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("api/",   api.urls),
-]
-```
-
-### Making requests
-
-```bash
-# List all books (paginated, default page 1 size 20)
-curl -H "Authorization: Bearer <token>" http://localhost:8000/api/books/
-# {"ok": true, "data": {"items": [...], "page": 1, "size": 20, "total": 47, "pages": 3}}
-
-# Page 2, 5 items per page
-curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/books/?page=2&size=5"
-
-# Filter by author
-curl -H "Authorization: Bearer <token>" "http://localhost:8000/api/books/?author=tolkien"
-
-# Get a single book
-curl -H "Authorization: Bearer <token>" http://localhost:8000/api/books/1
-# {"ok": true, "data": {"id": 1, "title": "...", ...}}
-
-# Create a book
-curl -X POST \
-     -H "Authorization: Bearer <token>" \
-     -H "Content-Type: application/json" \
-     -d '{"title":"Dune","author":"Herbert","isbn":"9780441013593","price":12.99,"published":"1965-08-01"}' \
-     http://localhost:8000/api/books/
-
-# Public endpoint — no token needed
-curl http://localhost:8000/api/books/featured
-
-# Error response shape
-curl -H "Authorization: Bearer <token>" http://localhost:8000/api/books/9999
-# {"ok": false, "error": "Not Found", "code": 404}
-```
+**Checklist:**
+1. Replace `from ninja import Router` → `from ninja_boost import AutoRouter`
+2. Add `ctx` as the second parameter to view functions
+3. Access `ctx["user"]` instead of `request.auth`
+4. Access `ctx["ip"]` instead of `request.META["REMOTE_ADDR"]`
+5. Remove manual pagination boilerplate — it's automatic
+6. Remove `auth=JWTAuth()` from every decorator — it's now in `NINJA_BOOST["AUTH"]`
 
 ---
 
 ## Feature reference
 
-### AutoAPI — response envelope
+### AutoAPI — response envelope + auth
 
-`AutoAPI` is a subclass of Django Ninja's `NinjaAPI`. It accepts every argument `NinjaAPI` accepts, and adds two automatic behaviours.
-
-**1. Default authentication** — reads `NINJA_BOOST["AUTH"]`, instantiates it, and sets it as the API-wide default. Individual routes can override this with `auth=MyAuth()` or `auth=None`.
-
-**2. Response envelope** — every successful response is wrapped automatically:
-
-```json
-{"ok": true, "data": <your return value>}
-```
-
-Error responses from `register_exception_handlers` use the same outer shape with `"ok": false`:
-
-```json
-{"ok": false, "error": "Item not found", "code": 404}
-```
-
-`AutoAPI` detects pre-wrapped responses by checking for the `"ok"` key and skips re-wrapping, so error and success responses are always clean — no double-wrapping.
-
-**All NinjaAPI constructor arguments work unchanged:**
+AutoAPI is a drop-in subclass of `NinjaAPI`. Every argument NinjaAPI accepts works unchanged.
 
 ```python
+from ninja_boost import AutoAPI
+
 api = AutoAPI(
-    title="My API",
-    version="2.0",
-    description="Shown in Swagger UI",
-    docs_url="/docs",
+    title="Bookstore API",
+    version="2.1",
+    description="Built with django-ninja-boost",
+    docs_url="/docs",           # all NinjaAPI kwargs still work
     openapi_url="/openapi.json",
-    urls_namespace="api",       # for Django URL reversing
-    csrf=True,                  # enable CSRF for cookie-based auth
-    auth=MyCustomAuth(),        # override the NINJA_BOOST default globally
 )
+```
+
+**What it adds automatically:**
+
+1. Default auth from `settings.NINJA_BOOST["AUTH"]` — no more `auth=JWTAuth()` on every route
+2. Response envelope: `{"ok": True, "data": <payload>}` on every success
+3. Plugin `on_startup()` hooks called when the API instance is created
+4. Documentation hardening if `NINJA_BOOST["DOCS"]` is configured
+
+**Response envelope:**
+
+```json
+// Success
+{"ok": true, "data": {"id": 1, "name": "Django"}}
+
+// Paginated list
+{"ok": true, "data": {"items": [...], "page": 1, "size": 20, "total": 142, "pages": 8}}
+
+// Error
+{"ok": false, "error": "Not found", "code": 404}
+```
+
+Override `RESPONSE_WRAPPER` for a custom shape:
+
+```python
+# myproject/responses.py
+def my_wrapper(data):
+    return {"success": True, "result": data, "timestamp": time.time()}
+
+# settings.py
+NINJA_BOOST = {"RESPONSE_WRAPPER": "myproject.responses.my_wrapper", ...}
 ```
 
 ---
 
-### AutoRouter — auth + DI + pagination
-
-`AutoRouter` is a subclass of Django Ninja's `Router`. It accepts every argument `Router` accepts, and automatically applies three behaviours to every route registered through it.
-
-**Authentication** — reads `NINJA_BOOST["AUTH"]`, instantiates it, and passes it to every operation. Override per-route with `auth=MyAuth()` or disable with `auth=None`.
-
-**Dependency injection** — wraps each view function with the DI decorator before registering, so every view receives `ctx` as its second argument automatically.
-
-**Pagination** — wraps each view function with the pagination decorator, so any view that returns a list or QuerySet is automatically paginated.
+### AutoRouter — DI + pagination + auth
 
 ```python
 from ninja_boost import AutoRouter
 
-router = AutoRouter(
-    tags=["Books"],      # Swagger grouping tag — same as Router
-)
+router = AutoRouter(tags=["Items"])
+```
+
+**Per-operation flags** (pass as keyword args to the decorator):
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `inject` | bool | `True` | Apply `ctx` injection |
+| `paginate` | bool | `True` | Apply auto-pagination |
+| `auth` | auth class or `None` | from settings | Override auth for this route |
+
+```python
+@router.get("/health", auth=None, inject=False, paginate=False)
+def health(request):
+    return {"status": "ok"}
+
+@router.post("/", response=ItemOut, paginate=False)
+def create_item(request, ctx, payload: ItemCreate):
+    return ItemService.create(payload)   # single object — skip pagination
 ```
 
 ---
 
 ### Context injection (ctx)
 
-Every view registered on an `AutoRouter` receives a `ctx` dict as its second argument. No decorator is needed — it is injected by the DI layer before your function is called.
+Every AutoRouter view receives a `ctx` dict as its second argument:
 
 ```python
-@router.get("/profile")
-def profile(request, ctx):
-    user     = ctx["user"]      # whatever your AUTH backend's .authenticate() returned
-    ip       = ctx["ip"]        # real client IP, honours X-Forwarded-For
-    trace_id = ctx["trace_id"]  # UUID hex from TracingMiddleware, or None
+@router.get("/me")
+def me(request, ctx):
+    user     = ctx["user"]       # from request.auth
+    ip       = ctx["ip"]         # client IP, honours X-Forwarded-For
+    trace_id = ctx["trace_id"]   # UUID from TracingMiddleware
+    services = ctx["services"]   # service registry (if services are registered)
+    return user
 ```
 
-**What `ctx["user"]` contains** is entirely determined by your AUTH backend. If your `HttpBearer.authenticate()` returns a JWT payload dict, `ctx["user"]` is that dict. If it returns a Django `User` object, `ctx["user"]` is that object. You control this completely.
-
-**`ctx["ip"]` resolution** reads `HTTP_X_FORWARDED_FOR` first (taking the leftmost address — the original client) and falls back to `REMOTE_ADDR`. This correctly handles proxies and load balancers.
-
-**`ctx["trace_id"]`** contains the 32-character hex UUID generated by `TracingMiddleware`. If the middleware is not installed, this value is `None`.
-
-**Opt out on specific routes** with `inject=False`:
+Access `ctx["services"]` to reach the service DI container:
 
 ```python
-@router.get("/ping", auth=None, inject=False, paginate=False)
-def ping(request):
-    # No ctx parameter — use for simple health-check style endpoints
-    return {"pong": True}
+@router.get("/dashboard")
+def dashboard(request, ctx):
+    users  = ctx["services"]["users"].recent()
+    orders = ctx["services"]["orders"].count_today()
+    return {"users": users, "orders": orders}
+```
+
+Opt out of injection on a specific route:
+
+```python
+@router.get("/webhook", inject=False, auth=None, paginate=False)
+def webhook(request):
+    # raw request access — no ctx injected
+    return {"received": True}
 ```
 
 ---
 
 ### Auto-pagination
 
-`auto_paginate` is applied to every route on an `AutoRouter`. If your view returns a list or Django QuerySet, the decorator slices it and returns a pagination envelope.
-
-**Return a QuerySet for best performance:**
+Any view returning a list or Django QuerySet is automatically paginated. No code changes needed.
 
 ```python
-@router.get("/books", response=list[BookOut])
-def list_books(request, ctx):
-    return Book.objects.filter(in_stock=True)  # ← QuerySet, not list()
+@router.get("/products", response=list[ProductOut])
+def list_products(request, ctx):
+    return Product.objects.filter(active=True)   # QuerySet — paginated automatically
 ```
 
-The paginator calls `.count()` (one `COUNT(*)` SQL query) then applies a LIMIT/OFFSET slice (one `SELECT` SQL query). Total cost: 2 queries regardless of how many rows exist. Never loads the full table.
+**Query parameters:** `?page=2&size=50`
 
-**Pagination query parameters:**
-
-| Parameter | Type | Default | Maximum | Description |
-|-----------|------|---------|---------|-------------|
-| `?page`   | int  | `1`     | —       | Page number, 1-based |
-| `?size`   | int  | `20`    | `200`   | Items per page |
-
-**Paginated response shape:**
-
+**Response shape:**
 ```json
 {
-  "ok": true,
-  "data": {
-    "items": [ {...}, {...} ],
-    "page":  2,
-    "size":  10,
-    "total": 142,
-    "pages": 15
-  }
+    "ok": true,
+    "data": {
+        "items":  [...],
+        "page":   2,
+        "size":   50,
+        "total":  1423,
+        "pages":  29
+    }
 }
 ```
 
-**Opt out per route** — use `paginate=False` for single objects, create, update, and delete operations:
+**Performance:** Uses `.count()` + `LIMIT/OFFSET` — two SQL queries, never loads the full table.
+
+**Opt out per route:**
 
 ```python
-@router.get("/{id}",   response=BookOut,  paginate=False)  # single object
-@router.post("/",      response=BookOut,  paginate=False)  # create
-@router.patch("/{id}", response=BookOut,  paginate=False)  # update
-@router.delete("/{id}",                  paginate=False)  # delete
+@router.post("/", response=ProductOut, paginate=False)
+def create_product(request, ctx, payload: ProductCreate):
+    return ProductService.create(payload)
 ```
 
-Invalid inputs are handled gracefully — `?page=abc` silently defaults to `1`.
+**Custom pagination** — replace the paginator entirely:
+
+```python
+# myproject/pagination.py
+def cursor_paginate(func):
+    @wraps(func)
+    def wrapper(request, *args, **kwargs):
+        result = func(request, *args, **kwargs)
+        cursor = request.GET.get("cursor")
+        ...
+    return wrapper
+
+# settings.py
+NINJA_BOOST = {"PAGINATION": "myproject.pagination.cursor_paginate", ...}
+```
 
 ---
 
-### Tracing middleware
+### TracingMiddleware
 
-`TracingMiddleware` runs before every request and attaches a UUID trace ID to it.
-
-**Enable in settings.py:**
+Adds a UUID trace ID to every request. Zero configuration.
 
 ```python
+# settings.py
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
-    # ... other middleware ...
+    ...
     "ninja_boost.middleware.TracingMiddleware",
 ]
 ```
 
-**What you get:**
-
-| Where | How to access | Value |
-|-------|--------------|-------|
-| Inside any view | `request.trace_id` | 32-char hex UUID |
-| Inside AutoRouter views | `ctx["trace_id"]` | same value |
-| In the HTTP response | `X-Trace-Id` header | same value |
-| In Django logs | automatic `DEBUG` log line | `METHOD /path [trace=...]` |
-
-**Use in structured logging:**
-
-```python
-import logging
-logger = logging.getLogger(__name__)
-
-@router.get("/orders/{id}")
-def get_order(request, ctx, id: int):
-    logger.info("Fetching order %s", id, extra={"trace_id": ctx["trace_id"]})
-    return OrderService.get(id)
-```
-
-**Correlate across microservices** — forward the trace ID to downstream calls:
-
-```python
-import httpx
-
-@router.post("/checkout")
-def checkout(request, ctx, payload: CheckoutRequest):
-    response = httpx.post(
-        "https://payments.internal/charge",
-        json=payload.dict(),
-        headers={"X-Trace-Id": ctx["trace_id"]},
-    )
-    return response.json()
-```
+- `request.trace_id` — available in every view
+- `ctx["trace_id"]` — available when using AutoRouter
+- `X-Trace-Id` response header — for APM tools and client-side correlation
+- All log records during the request include the trace ID automatically (with `StructuredLoggingMiddleware`)
 
 ---
 
 ### Exception handlers
-
-`register_exception_handlers(api)` registers two handlers that return errors in the standard envelope format.
 
 ```python
 from ninja_boost import AutoAPI
@@ -772,140 +492,909 @@ api = AutoAPI()
 register_exception_handlers(api)
 ```
 
-**Handler 1 — HttpError** (from `ninja.errors`):
+Error responses always follow the `{"ok": false, "error": "...", "code": N}` shape. Exception handlers emit `on_error` events for plugin/Sentry hooks automatically.
+
+Raise errors in views using Django Ninja's `HttpError`:
 
 ```python
 from ninja.errors import HttpError
 
-def get_book(book_id: int):
-    book = Book.objects.filter(id=book_id).first()
-    if not book:
-        raise HttpError(404, "Book not found")
-    return book
-
-# Client receives:
-# {"ok": false, "error": "Book not found", "code": 404}
+@router.get("/{id}", response=UserOut)
+def get_user(request, ctx, id: int):
+    user = User.objects.filter(id=id).first()
+    if not user:
+        raise HttpError(404, "User not found")
+    return user
 ```
 
-**Common HTTP codes to use with `HttpError`:**
+---
 
-| Code | Meaning | When to use |
-|------|---------|-------------|
-| 400  | Bad Request | Invalid input not caught by schema |
-| 401  | Unauthorized | User must authenticate |
-| 403  | Forbidden | User lacks permission |
-| 404  | Not Found | Resource doesn't exist |
-| 409  | Conflict | Duplicate, locked resource |
-| 422  | Unprocessable | Passes validation, fails business rules |
-| 429  | Too Many Requests | Rate limit exceeded |
+### Event bus
 
-**Handler 2 — generic Exception** — any unhandled exception returns a clean 500 to the client without leaking stack traces. The full traceback still appears in server logs.
-
-```json
-{"ok": false, "error": "Internal server error.", "code": 500}
-```
-
-**Register additional custom exception types** after the built-in handlers:
+The event bus is the backbone of ninja-boost's extensibility. Every lifecycle event fires through it. Subscribe from anywhere in your project code without modifying framework internals.
 
 ```python
-register_exception_handlers(api)   # built-in handlers first
+from ninja_boost.events import event_bus
 
-@api.exception_handler(InsufficientStockError)
-def handle_stock(request, exc):
-    return api.create_response(
-        request,
-        {"ok": False, "error": "Not enough stock.", "code": 409},
-        status=409,
-    )
+# Register a handler
+@event_bus.on("before_request")
+def log_incoming(request, ctx, **kw):
+    print(f"[{ctx['trace_id']}] {request.method} {request.path}")
+
+@event_bus.on("after_response")
+def record_timing(request, ctx, response, duration_ms, **kw):
+    print(f"→ {response.status_code}  {duration_ms:.1f}ms")
+
+@event_bus.on("on_error")
+def alert_on_error(request, ctx, exc, **kw):
+    Sentry.capture_exception(exc)
+```
+
+**Built-in events:**
+
+| Event constant | Emitted when |
+|----------------|-------------|
+| `BEFORE_REQUEST` | Before a view is called |
+| `AFTER_RESPONSE` | After the response is built |
+| `ON_ERROR` | On an unhandled exception |
+| `ON_AUTH_FAILURE` | Auth returns None |
+| `ON_RATE_LIMIT_EXCEEDED` | Rate limit breached |
+| `ON_PERMISSION_DENIED` | Permission check fails |
+| `ON_POLICY_DENIED` | Policy evaluation returns False |
+| `ON_SERVICE_REGISTERED` | Service added to registry |
+| `ON_PLUGIN_LOADED` | Plugin registered |
+
+**Async handlers:**
+
+```python
+@event_bus.on("before_request")
+async def async_handler(request, ctx, **kw):
+    await some_async_operation()
+
+# Fire with all async handlers running concurrently:
+await event_bus.emit_async("before_request", request=request, ctx=ctx)
+```
+
+**Wildcard handler** (receives every event):
+
+```python
+@event_bus.on_any
+def debug_all(event, **kw):
+    print(f"Event: {event}")
+```
+
+**Always use `**kw`** in handlers — events may gain new fields in future versions without breaking your code.
+
+---
+
+### Plugin system
+
+Plugins are classes that hook into the request lifecycle without forking the framework.
+
+```python
+from ninja_boost.plugins import BoostPlugin, plugin_registry
+
+class AuditPlugin(BoostPlugin):
+    name    = "audit"
+    version = "1.0"
+
+    def on_startup(self, api):
+        print(f"Audit plugin attached to {api.title}")
+
+    def on_request(self, request, ctx, **kw):
+        AuditLog.objects.create(
+            user_id = ctx["user"].get("id") if ctx["user"] else None,
+            path    = request.path,
+            ip      = ctx["ip"],
+            method  = request.method,
+        )
+
+    def on_error(self, request, exc, ctx, **kw):
+        sentry_sdk.capture_exception(exc)
+
+    def on_response(self, request, response, ctx, duration_ms, **kw):
+        if duration_ms > 1000:
+            logger.warning("Slow response: %s %.0fms", request.path, duration_ms)
+
+plugin_registry.register(AuditPlugin())
+```
+
+**Auto-load from settings:**
+
+```python
+NINJA_BOOST = {
+    ...
+    "PLUGINS": [
+        "myproject.plugins.AuditPlugin",
+        "myproject.plugins.SentryPlugin",
+    ],
+}
+```
+
+**Available plugin hooks:**
+
+| Hook | Called when |
+|------|-------------|
+| `on_startup(api)` | `AutoAPI.__init__()` |
+| `on_request(request, ctx)` | Before every view |
+| `on_response(request, response, ctx, duration_ms)` | After every response |
+| `on_error(request, exc, ctx)` | On unhandled exception |
+| `on_auth_failure(request)` | Auth returns None |
+| `on_rate_limit_exceeded(request, key, rate)` | Rate limit breached |
+| `on_permission_denied(request, ctx, permission)` | Permission check fails |
+
+Plugin exceptions are caught and logged — they can never crash the request cycle.
+
+---
+
+### Rate limiting
+
+```python
+from ninja_boost.rate_limiting import rate_limit
+
+@router.get("/search")
+@rate_limit("30/minute")                          # key = client IP (default)
+def search(request, ctx, q: str): ...
+
+@router.post("/login")
+@rate_limit("5/minute", key="ip")                 # explicit IP key
+def login(request, ctx, payload: LoginPayload): ...
+
+@router.post("/send-email")
+@rate_limit("10/hour", key="user")                # per authenticated user
+def send_email(request, ctx, payload): ...
+
+@router.get("/export")
+@rate_limit("3/day", key=lambda req, ctx: f"org:{ctx['user'].get('org_id')}")
+def export(request, ctx): ...                     # custom key function
+```
+
+**Rate strings:** `"N/second"`, `"N/minute"`, `"N/hour"`, `"N/day"`
+
+**Key types:**
+
+| Key | Identifies by |
+|-----|--------------|
+| `"ip"` (default) | Client IP address |
+| `"user"` | Authenticated user ID (falls back to IP for anonymous) |
+| callable | `fn(request, ctx) -> str` — any custom string |
+
+**Backends:**
+
+```python
+# settings.py
+NINJA_BOOST = {
+    ...
+    "RATE_LIMIT": {
+        "DEFAULT": "200/minute",                            # global default (optional)
+        "BACKEND": "ninja_boost.rate_limiting.InMemoryBackend",   # default
+        # "BACKEND": "ninja_boost.rate_limiting.CacheBackend",    # Redis/Memcached
+    },
+}
+```
+
+`InMemoryBackend` uses a thread-safe sliding window counter — zero dependencies. Suitable for single-process deployments.
+
+`CacheBackend` works across processes/servers using Django's cache framework. For Redis:
+
+```bash
+pip install "django-ninja-boost[redis]"
+```
+
+```python
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://localhost:6379/1",
+    }
+}
+NINJA_BOOST = {
+    "RATE_LIMIT": {"BACKEND": "ninja_boost.rate_limiting.CacheBackend"},
+}
+```
+
+Clients exceeding the limit receive `HTTP 429` with a standard `{"ok": false, "error": "..."}` body.
+
+---
+
+### Declarative permissions
+
+```python
+from ninja_boost.permissions import require, IsAuthenticated, IsStaff, HasPermission, IsOwner
+
+# Simple
+@router.get("/admin/report")
+@require(IsStaff)
+def admin_report(request, ctx): ...
+
+# Composition with & | ~
+@router.get("/internal")
+@require(IsAuthenticated & (IsStaff | HasPermission("myapp.view_internal")))
+def internal_view(request, ctx): ...
+
+# Object-level: caller must own the resource
+@router.delete("/orders/{id}")
+@require(IsOwner(lambda req, ctx, id, **kw: Order.objects.get(id=id).user_id))
+def delete_order(request, ctx, id: int): ...
+
+# Public endpoint (explicit)
+@router.get("/public", auth=None)
+@require(AllowAny)
+def public(request, ctx): ...
+```
+
+**Built-in permission objects:**
+
+| Permission | Allows |
+|-----------|--------|
+| `IsAuthenticated` | Any authenticated user |
+| `IsStaff` | Staff users only (`is_staff=True`) |
+| `IsSuperuser` | Superusers only (`is_superuser=True`) |
+| `AllowAny` | Everyone (explicit public access) |
+| `DenyAll` | Nobody (maintenance mode) |
+| `HasPermission("codename")` | Users with the Django model permission |
+| `IsOwner(fn)` | The user returned by `fn(request, ctx, **kwargs)` |
+
+**Custom permission class:**
+
+```python
+from ninja_boost.permissions import BasePermission
+
+class IsSubscribed(BasePermission):
+    def has_permission(self, request, ctx) -> bool:
+        user = ctx["user"]
+        return isinstance(user, dict) and user.get("plan") != "free"
+
+@router.get("/premium")
+@require(IsAuthenticated & IsSubscribed())
+def premium_content(request, ctx): ...
+```
+
+**Async permissions:**
+
+```python
+from ninja_boost.permissions import require_async
+
+@router.get("/items")
+@require_async(IsAuthenticated)
+async def list_items_async(request, ctx): ...
+```
+
+---
+
+### Policy registry
+
+Policies encode all access rules for a resource in one class — analogous to Pundit (Ruby) or Laravel Policies.
+
+```python
+from ninja_boost.policies import BasePolicy, policy_registry
+
+class OrderPolicy(BasePolicy):
+    resource_name = "order"
+
+    def before(self, request, ctx, action, obj=None):
+        # Superusers bypass all checks
+        if ctx["user"] and ctx["user"].get("is_superuser"):
+            return True
+        return None
+
+    def view(self, request, ctx, obj=None) -> bool:
+        return ctx["user"] is not None
+
+    def create(self, request, ctx, obj=None) -> bool:
+        return ctx["user"] is not None
+
+    def update(self, request, ctx, obj=None) -> bool:
+        return obj is not None and str(obj.user_id) == str(ctx["user"]["id"])
+
+    def delete(self, request, ctx, obj=None) -> bool:
+        return ctx["user"].get("is_staff", False)
+
+policy_registry.register(OrderPolicy())
+```
+
+**Using policies in views:**
+
+```python
+# Imperative check (raises HttpError(403) on failure)
+@router.put("/orders/{id}", response=OrderOut)
+def update_order(request, ctx, id: int, payload: OrderUpdate):
+    order = get_object_or_404(Order, id=id)
+    policy_registry.authorize(request, ctx, "order", "update", obj=order)
+    return OrderService.update(order, payload)
+
+# Non-raising check
+can_delete = policy_registry.can(request, ctx, "order", "delete", obj=order)
+
+# Decorator style
+from ninja_boost.policies import policy
+
+@router.delete("/orders/{id}")
+@policy("order", "delete", get_obj=lambda id, **kw: Order.objects.get(id=id))
+def delete_order(request, ctx, id: int): ...
+```
+
+**Auto-load from settings:**
+
+```python
+NINJA_BOOST = {
+    "POLICIES": [
+        "apps.orders.policies.OrderPolicy",
+        "apps.products.policies.ProductPolicy",
+    ],
+}
+```
+
+---
+
+### Service registry (DI container)
+
+Register services centrally; inject them into views via `ctx["services"]` or the `@inject_service` decorator.
+
+```python
+from ninja_boost.services import BoostService, service_registry
+
+class UserService(BoostService):
+    name = "users"
+
+    def list_users(self):
+        return User.objects.filter(is_active=True)
+
+    def get_user(self, user_id: int):
+        return get_object_or_404(User, id=user_id)
+
+service_registry.register(UserService())
+```
+
+**In views:**
+
+```python
+@router.get("/users")
+def list_users(request, ctx):
+    svc = ctx["services"]["users"]
+    return svc.list_users()
+```
+
+**With the `@inject_service` decorator:**
+
+```python
+from ninja_boost.services import inject_service
+
+@router.get("/dashboard")
+@inject_service("users", "orders")
+def dashboard(request, ctx):
+    users  = ctx["svc_users"].list_users()
+    orders = ctx["svc_orders"].recent()
+    return {"users": users, "orders": orders}
+```
+
+**Scoped services** (new instance per request):
+
+```python
+class RequestScopedService(BoostService):
+    name   = "request_cache"
+    scoped = True                         # ← fresh instance per request
+
+    def __init__(self):
+        self._data = {}
+
+    def on_request(self, request, ctx):   # called at the start of each request
+        self._data["user_id"] = ctx["user"]["id"] if ctx["user"] else None
+```
+
+**Auto-load from settings:**
+
+```python
+NINJA_BOOST = {
+    "SERVICES": [
+        "apps.users.services.UserService",
+        "apps.orders.services.OrderService",
+    ],
+}
+```
+
+---
+
+### Structured logging
+
+Drop-in JSON logging with automatic request context enrichment.
+
+```python
+# settings.py
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json":    {"()": "ninja_boost.logging_structured.StructuredJsonFormatter"},
+        "verbose": {"()": "ninja_boost.logging_structured.StructuredVerboseFormatter"},  # dev
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "json"},
+    },
+    "root":    {"handlers": ["console"], "level": "INFO"},
+    "loggers": {"ninja_boost": {"level": "DEBUG"}},
+}
+
+MIDDLEWARE = [
+    ...
+    "ninja_boost.middleware.TracingMiddleware",
+    "ninja_boost.logging_structured.StructuredLoggingMiddleware",
+]
+```
+
+**Every log record automatically includes:**
+
+```json
+{
+  "timestamp": "2026-02-24T14:30:00.123Z",
+  "level":     "INFO",
+  "logger":    "apps.orders",
+  "message":   "Order created",
+  "trace_id":  "a3f8c12d44e1...",
+  "method":    "POST",
+  "path":      "/api/orders",
+  "user_id":   42,
+  "ip":        "203.0.113.1"
+}
+```
+
+**Access log (automatic, one line per request):**
+
+```json
+{
+  "timestamp":   "2026-02-24T14:30:00.456Z",
+  "level":       "INFO",
+  "logger":      "ninja_boost.access",
+  "message":     "POST /api/orders → 201 (12.4ms)",
+  "http_status": 201,
+  "duration_ms": 12.4,
+  "trace_id":    "a3f8c12d..."
+}
+```
+
+Works correctly in async views — uses `contextvars` internally, not threadlocals.
+
+---
+
+### Metrics hooks
+
+Pluggable metrics with zero-dep logging backend included.
+
+```python
+# settings.py — Prometheus
+NINJA_BOOST = {
+    "METRICS": {
+        "BACKEND":   "ninja_boost.metrics.PrometheusBackend",
+        "NAMESPACE": "myapi",
+    }
+}
+```
+
+```bash
+pip install "django-ninja-boost[prometheus]"
+```
+
+**Metrics emitted automatically:**
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `{ns}_request_total` | counter | method, path, status |
+| `{ns}_request_duration_ms` | histogram | method, path |
+| `{ns}_request_errors_total` | counter | method, path, status |
+| `{ns}_active_requests` | gauge | — |
+| `{ns}_unhandled_errors_total` | counter | error_type |
+
+**Manual metrics in views:**
+
+```python
+from ninja_boost.metrics import metrics
+
+@router.post("/checkout")
+def checkout(request, ctx, payload: CartPayload):
+    result = OrderService.checkout(payload)
+    metrics.increment("orders_created", labels={"tier": ctx["user"]["tier"]})
+    with metrics.timer("checkout_duration_ms"):
+        ...
+    return result
+```
+
+**Per-function tracking:**
+
+```python
+from ninja_boost.metrics import track
+
+@router.get("/products")
+@track("list_products")                   # records call count + duration
+def list_products(request, ctx): ...
+```
+
+**StatsD backend:**
+
+```python
+NINJA_BOOST = {
+    "METRICS": {
+        "BACKEND":   "ninja_boost.metrics.StatsDBackend",
+        "HOST":      "localhost",
+        "PORT":      8125,
+        "NAMESPACE": "myapi",
+    }
+}
+```
+
+**Logging backend (zero deps, dev/CI):**
+
+```python
+NINJA_BOOST = {
+    "METRICS": {"BACKEND": "ninja_boost.metrics.LoggingBackend"}
+}
+```
+
+---
+
+### Async support
+
+Write `async def` views without any decorator changes. ninja-boost detects async views automatically.
+
+```python
+@router.get("/items")
+async def list_items(request, ctx):
+    items = await Item.objects.filter(active=True).acount()  # Django 4.1+ async ORM
+    return await Item.objects.filter(active=True)            # auto-paginated
+
+@router.get("/{id}")
+async def get_item(request, ctx, id: int):
+    item = await Item.objects.aget(id=id)
+    return item
+```
+
+**What changes automatically with `async def`:**
+
+- `inject_context` → `async_inject_context`
+- `auto_paginate` → `async_paginate` (uses Django's `acount()` + async iteration)
+- Rate limit backend called in thread executor (avoids blocking event loop)
+- Context var propagation is safe in async contexts
+
+**ASGI server setup:**
+
+```bash
+pip install uvicorn
+uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4
+```
+
+```python
+# asgi.py
+import os
+from django.core.asgi import get_asgi_application
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+application = get_asgi_application()
+```
+
+**Async tracing middleware** (for pure ASGI stacks):
+
+```python
+MIDDLEWARE = [
+    "ninja_boost.async_support.AsyncTracingMiddleware",  # use instead of TracingMiddleware
+    "ninja_boost.lifecycle.LifecycleMiddleware",
+]
+```
+
+---
+
+### Lifecycle middleware
+
+`LifecycleMiddleware` is a single middleware that coordinates all cross-cutting concerns at the request/response boundary. Install it and everything else wires up automatically.
+
+```python
+MIDDLEWARE = [
+    ...
+    "ninja_boost.middleware.TracingMiddleware",       # sets trace_id (required first)
+    "ninja_boost.lifecycle.LifecycleMiddleware",     # ← coordinates everything else
+]
+```
+
+**What it does per request:**
+
+1. Binds trace_id, method, path, user_id into the log context var
+2. Increments the `active_requests` gauge
+3. Emits `before_request` event (fires all registered handlers and plugins)
+4. Calls the view
+5. Records response time
+6. Decrements `active_requests`, emits `request_total` counter
+7. Emits `after_response` event
+8. Attaches `X-RateLimit-Limit` and `X-RateLimit-Remaining` headers
+9. Writes the structured access log line
+10. Clears the log context var
+
+Supports both sync (WSGI) and async (ASGI) stacks.
+
+---
+
+### Health checks
+
+Production-ready health endpoints compatible with Kubernetes, Docker, AWS ALB, GCP Cloud Run, and any uptime monitor.
+
+```python
+from ninja_boost.health import health_router
+api.add_router("/health", health_router, auth=None)
+```
+
+**Endpoints:**
+
+- `GET /health/live` — liveness probe (always 200 if process is running)
+- `GET /health/ready` — readiness probe (runs all checks, 200 or 503)
+- `GET /health/` — alias for liveness
+
+**Default checks (run on `/health/ready`):**
+
+| Check | Critical | What it tests |
+|-------|----------|---------------|
+| `database` | Yes | `SELECT 1` via Django ORM |
+| `cache` | No | Write + read from default cache |
+| `migrations` | No | No unapplied migrations |
+
+**Custom checks:**
+
+```python
+from ninja_boost.health import register_check
+
+@register_check("redis")
+def check_redis():
+    from django.core.cache import cache
+    cache.set("health:ping", 1, timeout=5)
+    assert cache.get("health:ping") == 1
+
+@register_check("celery", critical=False)        # degraded, not down
+def check_celery():
+    from myapp.celery import app
+    result = app.control.ping(timeout=1.0)
+    assert result, "No Celery workers responding"
+
+@register_check("external_api", critical=False)
+def check_payment_gateway():
+    import requests
+    r = requests.get("https://status.stripe.com/api/v2/status.json", timeout=3)
+    assert r.status_code == 200
+```
+
+**Kubernetes probe config:**
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /api/health/live
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /api/health/ready
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+```
+
+---
+
+### Response caching
+
+Cache GET responses to avoid redundant database queries.
+
+```python
+from ninja_boost.caching import cache_response
+
+@router.get("/products")
+@cache_response(ttl=300)                          # cache 5 minutes, key = URL + query
+def list_products(request, ctx): ...
+
+@router.get("/categories")
+@cache_response(ttl=3600, key="path")             # cache 1 hour per path (ignores query)
+def list_categories(request, ctx): ...
+
+@router.get("/me/wishlist")
+@cache_response(ttl=120, key="user")              # per authenticated user
+def my_wishlist(request, ctx): ...
+
+@router.get("/leaderboard")
+@cache_response(
+    ttl=30,
+    key=lambda req, ctx: f"leaderboard:{ctx['user'].get('tenant_id')}",
+)
+def leaderboard(request, ctx): ...               # custom key function
+```
+
+**Configuration:**
+
+```python
+NINJA_BOOST = {
+    "CACHE": {
+        "BACKEND": "default",     # Django cache alias
+        "PREFIX":  "boost:",
+        "ENABLED": True,
+    }
+}
+```
+
+**Invalidation:**
+
+```python
+from ninja_boost.caching import cache_manager
+
+cache_manager.invalidate("path", "/api/products")
+cache_manager.invalidate_prefix("leaderboard:")
+cache_manager.clear_all()
+```
+
+---
+
+### API versioning
+
+**Strategy A — URL prefix (recommended):**
+
+```python
+from ninja_boost.versioning import versioned_api
+
+apis = versioned_api(["v1", "v2"], title="Bookstore API")
+apis["v1"].add_router("/books", books_v1_router)
+apis["v2"].add_router("/books", books_v2_router)
+
+urlpatterns = [
+    path(f"api/{ver}/", api.urls)
+    for ver, api in apis.items()
+]
+```
+
+**Strategy B — Header-based (`X-API-Version`):**
+
+```python
+from ninja_boost.versioning import require_version
+
+@router.get("/users")
+@require_version("2.0", header="X-API-Version")
+def list_users_v2(request, ctx): ...
+```
+
+**Strategy C — `VersionedRouter`:**
+
+```python
+from ninja_boost.versioning import VersionedRouter
+
+users = VersionedRouter(tags=["Users"])
+
+@users.v1.get("/")
+def list_users_v1(request, ctx): ...
+
+@users.v2.get("/")
+def list_users_v2(request, ctx): ...
+
+api_v1.add_router("/users", users.v1)
+api_v2.add_router("/users", users.v2)
+```
+
+**Deprecation headers:**
+
+```python
+from ninja_boost.versioning import deprecated
+
+@router.get("/v1/old-endpoint")
+@deprecated(sunset="2026-12-31", replacement="/api/v2/users")
+def old_endpoint(request, ctx): ...
+```
+
+Responses include standard RFC 8594 headers:
+```
+Deprecation: true
+Sunset: 2026-12-31
+Link: </api/v2/users>; rel="successor-version"
+```
+
+---
+
+### Docs hardening
+
+Control who can access `/api/docs` and `/api/redoc`.
+
+```python
+NINJA_BOOST = {
+    "DOCS": {
+        "ENABLED":               True,           # False → 404 for docs URLs
+        "REQUIRE_STAFF":         False,          # True → only staff users
+        "REQUIRE_AUTH":          False,          # True → any authenticated user
+        "ALLOWED_IPS":           [],             # ["10.0.0.0/8", "127.0.0.1"]
+        "DISABLE_IN_PRODUCTION": False,          # True → disabled when DEBUG=False
+    }
+}
+```
+
+Or programmatic control:
+
+```python
+from ninja_boost.docs import harden_docs, DocGuard
+
+harden_docs(api, guard=DocGuard(
+    require_staff=True,
+    allowed_ips=["10.0.0.0/8"],
+    disable_in_production=True,
+))
+```
+
+**Add Bearer auth to the OpenAPI schema:**
+
+```python
+from ninja_boost.docs import add_security_scheme
+
+add_security_scheme(api, name="BearerAuth", scheme_type="http",
+                    scheme="bearer", bearer_format="JWT")
 ```
 
 ---
 
 ## Configuration reference
 
-All configuration lives in a single `NINJA_BOOST` dict in `settings.py`. Every key is optional — sensible defaults are used for any key you omit.
+Complete `NINJA_BOOST` settings dict with all options:
 
 ```python
-# settings.py
 NINJA_BOOST = {
-    # Dotted path to an HttpBearer subclass (or compatible auth class)
-    "AUTH": "myproject.auth.JWTAuth",
+    # ── Core ───────────────────────────────────────────────────────────────
+    # Auth class (dotted path). Any HttpBearer/APIKeyHeader subclass.
+    "AUTH":             "ninja_boost.integrations.BearerTokenAuth",
 
-    # Dotted path to a callable(data: Any) -> dict
+    # Response wrapper function (data: Any) -> dict
     "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
 
-    # Dotted path to a view-function decorator for pagination
-    "PAGINATION": "ninja_boost.pagination.auto_paginate",
+    # Pagination decorator for list/QuerySet return values
+    "PAGINATION":       "ninja_boost.pagination.auto_paginate",
 
-    # Dotted path to a view-function decorator for context injection
-    "DI": "ninja_boost.dependencies.inject_context",
+    # Context injection decorator (adds ctx to every view)
+    "DI":               "ninja_boost.dependencies.inject_context",
+
+    # ── Rate limiting ──────────────────────────────────────────────────────
+    "RATE_LIMIT": {
+        "DEFAULT":  None,     # "200/minute" — applied globally (per-route @rate_limit wins)
+        "BACKEND":  "ninja_boost.rate_limiting.InMemoryBackend",
+        # "BACKEND": "ninja_boost.rate_limiting.CacheBackend",
+    },
+
+    # ── Metrics ────────────────────────────────────────────────────────────
+    "METRICS": {
+        "BACKEND":   None,    # "ninja_boost.metrics.PrometheusBackend"
+        "NAMESPACE": "ninja_boost",
+    },
+
+    # ── Response caching ───────────────────────────────────────────────────
+    "CACHE": {
+        "BACKEND": "default",   # Django cache alias
+        "PREFIX":  "boost:",
+        "ENABLED": True,
+    },
+
+    # ── Documentation hardening ────────────────────────────────────────────
+    "DOCS": {
+        "ENABLED":               True,
+        "REQUIRE_STAFF":         False,
+        "REQUIRE_AUTH":          False,
+        "ALLOWED_IPS":           [],
+        "DISABLE_IN_PRODUCTION": False,
+        "TITLE":                 None,    # Override OpenAPI title
+        "DESCRIPTION":           None,
+        "VERSION":               None,
+        "SERVERS":               [],      # [{"url": "https://api.example.com"}]
+    },
+
+    # ── Auto-loaded on startup ─────────────────────────────────────────────
+    "PLUGINS": [
+        # "myproject.plugins.AuditPlugin",
+    ],
+
+    "POLICIES": [
+        # "apps.orders.policies.OrderPolicy",
+    ],
+
+    "SERVICES": [
+        # "apps.users.services.UserService",
+    ],
 }
-```
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `AUTH` | `ninja_boost.integrations.BearerTokenAuth` | Auth class. Instantiated per-router. Must implement the Django Ninja auth protocol. |
-| `RESPONSE_WRAPPER` | `ninja_boost.responses.wrap_response` | Callable wrapping success response data. Signature: `(data: Any) -> dict`. |
-| `PAGINATION` | `ninja_boost.pagination.auto_paginate` | Decorator applied to view functions that return lists or QuerySets. |
-| `DI` | `ninja_boost.dependencies.inject_context` | Decorator applied to view functions to inject the context dict. |
-
-**Use all defaults** (great for prototyping — don't include `NINJA_BOOST` in settings at all):
-
-```python
-# settings.py — omit NINJA_BOOST entirely, or use an empty dict
-```
-
-**Override only the auth** and keep everything else as defaults:
-
-```python
-NINJA_BOOST = {
-    "AUTH": "myproject.auth.JWTAuth",
-}
-```
-
-All four default values are listed in `ninja_boost/conf.py` and are always used as fallbacks.
-
----
-
-## Per-route opt-out flags
-
-These keyword arguments are consumed by `AutoRouter` and never passed to Django Ninja. They let you bypass specific behaviours for individual routes.
-
-```python
-@router.get(
-    "/path",
-    auth=None,          # disable auth entirely — public endpoint
-    inject=False,       # don't inject ctx — view signature: (request, ...)
-    paginate=False,     # don't paginate — return raw value
-)
-def my_view(request):
-    ...
-```
-
-| Flag | Type | Default | Effect |
-|------|------|---------|--------|
-| `auth=None` | `None` | — | Disables authentication — public endpoint |
-| `auth=MyAuth()` | instance | — | Overrides the global auth for this route only |
-| `inject=False` | bool | `True` | View receives only `(request, ...)` — no `ctx` |
-| `paginate=False` | bool | `True` | Returns raw return value — no pagination envelope |
-
-**Common patterns:**
-
-```python
-# Health check — open, no ctx, no pagination
-@router.get("/health", auth=None, inject=False, paginate=False)
-def health(request):
-    return {"status": "ok"}
-
-# Single object — auth and ctx, but no pagination
-@router.get("/{id}", response=ItemOut, paginate=False)
-def get_item(request, ctx, id: int):
-    return ItemService.get(id)
-
-# Admin-only route with a different auth class
-@router.delete("/{id}", auth=AdminAuth(), paginate=False)
-def admin_delete(request, ctx, id: int):
-    ...
 ```
 
 ---
@@ -914,610 +1403,389 @@ def admin_delete(request, ctx, id: int):
 
 ### Custom auth (JWT)
 
-The most common production pattern. Replace the demo auth with a real JWT validator:
-
-```bash
-pip install PyJWT
-```
-
 ```python
 # myproject/auth.py
 import jwt
 from ninja.security import HttpBearer
 from django.conf import settings
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
 
 class JWTAuth(HttpBearer):
     def authenticate(self, request, token: str):
         try:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+            return payload
         except jwt.ExpiredSignatureError:
-            return None    # expired token → 401
+            return None
         except jwt.DecodeError:
-            return None    # malformed token → 401
-
-        try:
-            user = User.objects.get(id=payload["user_id"])
-        except User.DoesNotExist:
             return None
 
-        # This return value becomes ctx["user"] in all your views
-        return {
-            "id":       user.id,
-            "username": user.username,
-            "email":    user.email,
-            "is_staff": user.is_staff,
-        }
-```
-
-```python
 # settings.py
 NINJA_BOOST = {
     "AUTH": "myproject.auth.JWTAuth",
+    ...
 }
 ```
-
----
 
 ### Django session auth
 
-For browser-based SPAs using Django's built-in sessions:
-
 ```python
-# settings.py — use Django Ninja's built-in session auth
-NINJA_BOOST = {
-    "AUTH": "ninja.security.django_auth",
-}
+# myproject/auth.py
+from ninja.security import django_auth
 
-# Also enable CSRF on AutoAPI for session auth:
-# api = AutoAPI(csrf=True)
+# Use Django's built-in session authentication:
+NINJA_BOOST = {
+    "AUTH": "ninja.security.django_auth",   # built-in to Django Ninja
+    ...
+}
 ```
 
----
-
 ### API key auth
-
-For machine-to-machine (M2M) or third-party integrations:
 
 ```python
 # myproject/auth.py
 from ninja.security import APIKeyHeader
-from myproject.models import APIKey
 
-class APIKeyAuth(APIKeyHeader):
+class ApiKeyAuth(APIKeyHeader):
     param_name = "X-API-Key"
 
     def authenticate(self, request, key: str):
         try:
-            api_key = APIKey.objects.select_related("owner").get(
-                key=key, is_active=True
-            )
-            return {"owner": api_key.owner, "scope": api_key.scope}
-        except APIKey.DoesNotExist:
+            return ApiKey.objects.select_related("user").get(key=key, active=True)
+        except ApiKey.DoesNotExist:
             return None
 ```
 
----
-
 ### Custom response envelope
-
-Replace `{"ok": True, "data": ...}` with your own shape:
 
 ```python
 # myproject/responses.py
-from typing import Any
-from datetime import datetime, timezone
+import time
 
-def versioned_envelope(data: Any) -> dict:
+def branded_response(data):
     return {
-        "success":   True,
-        "payload":   data,
-        "api":       "v2",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "success": True,
+        "result":  data,
+        "ts":      time.time(),
+        "api":     "MyAPI/2.0",
     }
 ```
 
-```python
-NINJA_BOOST = {
-    "RESPONSE_WRAPPER": "myproject.responses.versioned_envelope",
-}
-```
-
----
-
-### Custom pagination (cursor-based)
-
-For tables with millions of rows where offset pagination becomes slow:
-
-```python
-# myproject/pagination.py
-import base64
-from functools import wraps
-
-def cursor_paginate(func):
-    """Cursor-based pagination — more efficient than offset for large datasets."""
-    @wraps(func)
-    def wrapper(request, *args, **kwargs):
-        result = func(request, *args, **kwargs)
-
-        if result is None or isinstance(result, dict):
-            return result   # single object — pass through
-
-        size       = max(1, min(200, int(request.GET.get("size", 20))))
-        cursor_raw = request.GET.get("cursor")
-        after_id   = None
-
-        if cursor_raw:
-            try:
-                after_id = int(base64.b64decode(cursor_raw).decode())
-            except Exception:
-                pass
-
-        if after_id and hasattr(result, "filter"):
-            result = result.filter(id__gt=after_id)
-
-        page_items = list(result[:size + 1])
-        has_next   = len(page_items) > size
-        items      = page_items[:size]
-
-        next_cursor = None
-        if has_next and items and hasattr(items[-1], "id"):
-            next_cursor = base64.b64encode(str(items[-1].id).encode()).decode()
-
-        return {"items": items, "next_cursor": next_cursor, "has_next": has_next, "size": size}
-
-    return wrapper
-```
-
-```python
-NINJA_BOOST = {
-    "PAGINATION": "myproject.pagination.cursor_paginate",
-}
-```
-
----
-
 ### Custom DI context
-
-Add tenant, permissions, or feature flags to the context:
 
 ```python
 # myproject/dependencies.py
 from functools import wraps
 
-def inject_rich_context(func):
+def rich_context(func):
     @wraps(func)
     def wrapper(request, *args, **kwargs):
-        user = getattr(request, "auth", None)
-
-        host      = request.get_host()
-        tenant    = host.split(".")[0] if "." in host else "default"
-
-        xff = request.META.get("HTTP_X_FORWARDED_FOR")
-        ip  = xff.split(",")[0].strip() if xff else request.META.get("REMOTE_ADDR", "")
-
         ctx = {
-            "user":     user,
-            "ip":       ip,
-            "trace_id": getattr(request, "trace_id", None),
-            "tenant":   tenant,
+            "user":       getattr(request, "auth", None),
+            "ip":         request.META.get("REMOTE_ADDR"),
+            "trace_id":   getattr(request, "trace_id", None),
+            "tenant_id":  request.META.get("HTTP_X_TENANT_ID"),
+            "locale":     request.META.get("HTTP_ACCEPT_LANGUAGE", "en"),
         }
         return func(request, ctx, *args, **kwargs)
     return wrapper
-```
 
-```python
-NINJA_BOOST = {
-    "DI": "myproject.dependencies.inject_rich_context",
-}
+# settings.py
+NINJA_BOOST = {"DI": "myproject.dependencies.rich_context", ...}
 ```
 
 ---
 
 ## Real-world patterns
 
-### Role-based access control
+### Sentry integration plugin
 
 ```python
-# myproject/guards.py
-from ninja.errors import HttpError
+import sentry_sdk
+from ninja_boost.plugins import BoostPlugin, plugin_registry
 
-def require_staff(ctx: dict):
-    if not ctx["user"].get("is_staff"):
-        raise HttpError(403, "Staff access required.")
+class SentryPlugin(BoostPlugin):
+    name = "sentry"
 
-def require_permission(ctx: dict, codename: str):
-    perms = ctx["user"].get("permissions", [])
-    if codename not in perms:
-        raise HttpError(403, f"Permission '{codename}' required.")
+    def on_error(self, request, exc, ctx, **kw):
+        with sentry_sdk.push_scope() as scope:
+            scope.set_user(ctx.get("user"))
+            scope.set_tag("trace_id", ctx.get("trace_id"))
+            scope.set_tag("path", request.path)
+            sentry_sdk.capture_exception(exc)
+
+plugin_registry.register(SentryPlugin())
 ```
-
-```python
-# apps/books/routers.py
-from myproject.guards import require_staff, require_permission
-
-@router.post("/", response=BookOut, paginate=False)
-def create_book(request, ctx, payload: BookCreate):
-    require_permission(ctx, "books.add_book")   # ← raises 403 if not permitted
-    return BookService.create_book(payload)
-
-@router.delete("/{id}", paginate=False)
-def delete_book(request, ctx, id: int):
-    require_staff(ctx)
-    BookService.delete_book(id)
-    return None
-```
-
----
 
 ### Multi-tenant APIs
 
-Route requests to the correct data partition based on the tenant:
-
 ```python
-@router.get("/", response=list[OrderOut])
-def list_orders(request, ctx):
-    # ctx["tenant"] from a custom DI decorator (see Custom DI context above)
-    return Order.objects.filter(tenant=ctx["tenant"])
+class TenantRateLimit(BoostPlugin):
+    name = "tenant_rate_limit"
+
+    def on_request(self, request, ctx, **kw):
+        tenant_id = request.META.get("HTTP_X_TENANT_ID")
+        if not tenant_id:
+            return
+        plan = TenantPlan.get(tenant_id)
+        rate = {"free": "60/hour", "pro": "6000/hour", "enterprise": "60000/hour"}[plan]
+        from ninja_boost.rate_limiting import rate_limit, _get_backend, _parse_rate
+        limit, window = _parse_rate(rate)
+        backend = _get_backend()
+        allowed, _, _ = backend.is_allowed(f"tenant:{tenant_id}", limit, window)
+        if not allowed:
+            from ninja.errors import HttpError
+            raise HttpError(429, "Tenant rate limit exceeded")
 ```
 
----
+### Background task integration (Celery)
+
+```python
+from ninja_boost.events import event_bus
+
+@event_bus.on("after_response")
+def maybe_enqueue_task(request, ctx, response, duration_ms, **kw):
+    # Fire analytics task after every API call (non-blocking)
+    if response.status_code == 201 and "/orders" in request.path:
+        from apps.analytics.tasks import track_order_created
+        track_order_created.delay(
+            user_id=ctx["user"]["id"],
+            trace_id=ctx["trace_id"],
+        )
+```
+
+### Role-based access control
+
+```python
+from ninja_boost.permissions import BasePermission
+
+class HasRole(BasePermission):
+    def __init__(self, *roles: str):
+        self._roles = set(roles)
+
+    def has_permission(self, request, ctx) -> bool:
+        user = ctx.get("user")
+        if not user:
+            return False
+        user_roles = set(user.get("roles", []) if isinstance(user, dict)
+                         else getattr(user, "roles", []))
+        return bool(self._roles & user_roles)
+
+CanEditContent = IsAuthenticated & HasRole("editor", "admin")
+CanPublish     = IsAuthenticated & HasRole("publisher", "admin")
+
+@router.put("/{id}/publish")
+@require(CanPublish)
+def publish_article(request, ctx, id: int): ...
+```
 
 ### File uploads
-
-Django Ninja handles file uploads natively — no changes needed for boost:
 
 ```python
 from ninja import File
 from ninja.files import UploadedFile
+from ninja_boost import AutoRouter
 
-@router.post("/cover", paginate=False)
-def upload_cover(request, ctx, book_id: int, file: UploadedFile = File(...)):
-    if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
-        raise HttpError(400, "Only JPEG, PNG, and WebP images are accepted.")
-    path = BookService.save_cover(book_id, file)
-    return {"cover_url": path}
-```
+router = AutoRouter(tags=["Files"])
 
----
-
-### Multiple API versions
-
-Run v1 and v2 simultaneously:
-
-```python
-# urls.py
-from ninja_boost import AutoAPI
-from ninja_boost.exceptions import register_exception_handlers
-
-api_v1 = AutoAPI(title="API v1", version="1.0", urls_namespace="api_v1")
-register_exception_handlers(api_v1)
-api_v1.add_router("/books", books_router_v1)
-
-api_v2 = AutoAPI(title="API v2", version="2.0", urls_namespace="api_v2")
-register_exception_handlers(api_v2)
-api_v2.add_router("/books", books_router_v2)
-
-urlpatterns = [
-    path("api/v1/", api_v1.urls),
-    path("api/v2/", api_v2.urls),
-]
-```
-
----
-
-### Background tasks
-
-Works alongside Celery or Django-Q without any conflicts:
-
-```python
-# tasks.py
-from celery import shared_task
-
-@shared_task
-def process_import(file_path: str, user_id: int):
-    BookService.bulk_import(file_path, imported_by=user_id)
-```
-
-```python
-# routers.py
-@router.post("/import", paginate=False)
-def start_import(request, ctx, file: UploadedFile = File(...)):
-    path = save_temp_file(file)
-    task = process_import.delay(path, ctx["user"]["id"])
-    return {"task_id": task.id, "status": "queued"}
+@router.post("/upload", paginate=False)
+def upload_file(request, ctx, file: UploadedFile = File(...)):
+    # Standard Django Ninja file upload — works unchanged with AutoRouter
+    saved_path = FileService.save(file, owner=ctx["user"]["id"])
+    return {"path": saved_path, "size": file.size}
 ```
 
 ---
 
 ## Testing
 
-### Setup
-
 ```bash
-pip install pytest pytest-django
+pip install "django-ninja-boost[dev]"
+pytest
 ```
 
-```ini
-# pytest.ini
-[pytest]
-DJANGO_SETTINGS_MODULE = myproject.settings
-```
-
-### Testing service layer
-
-Services are plain Python — test them directly without HTTP overhead:
+**Test configuration (conftest.py):**
 
 ```python
-# tests/test_book_service.py
-import pytest
-from django.test import TestCase
-from apps.books.services import BookService
-from apps.books.schemas import BookCreate
-from apps.books.models import Book
+import django
+from django.conf import settings
 
-class TestBookService(TestCase):
-
-    def setUp(self):
-        Book.objects.create(
-            title="Dune", author="Herbert", isbn="9780441013593",
-            price=12.99, published="1965-08-01"
-        )
-
-    def test_list_returns_queryset(self):
-        from apps.books.schemas import BookFilters
-        assert BookService.list_books(BookFilters()).count() == 1
-
-    def test_filter_by_author(self):
-        from apps.books.schemas import BookFilters
-        assert BookService.list_books(BookFilters(author="Tolkien")).count() == 0
-
-    def test_create_book(self):
-        data = BookCreate(title="1984", author="Orwell", isbn="9780451524935",
-                          price=9.99, published="1949-06-08")
-        result = BookService.create_book(data)
-        assert result.title == "1984"
-        assert Book.objects.count() == 2
+def pytest_configure():
+    settings.configure(
+        INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "ninja_boost"],
+        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+        NINJA_BOOST={
+            "AUTH":             "ninja_boost.integrations.BearerTokenAuth",
+            "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
+            "PAGINATION":       "ninja_boost.pagination.auto_paginate",
+            "DI":               "ninja_boost.dependencies.inject_context",
+            "RATE_LIMIT":       {"ENABLED": False},   # ← disable in tests
+            "METRICS":          {"BACKEND": "ninja_boost.metrics.LoggingBackend"},
+        },
+    )
+    django.setup()
 ```
 
-### Testing API endpoints
-
-Django Ninja's `TestClient` makes HTTP calls without running a server:
+**Test patterns:**
 
 ```python
-# tests/test_book_api.py
-import pytest
 from ninja.testing import TestClient
-from apps.books.routers import router
+from ninja_boost import AutoAPI, AutoRouter
+from ninja_boost.exceptions import register_exception_handlers
 
-client = TestClient(router)
+def test_list_items():
+    api    = AutoAPI()
+    router = AutoRouter()
+    register_exception_handlers(api)
 
-class TestBookAPI:
+    @router.get("/items")
+    def list_items(request, ctx):
+        return [{"id": 1, "name": "Widget"}]
 
-    def test_requires_auth(self, db):
-        response = client.get("/")
-        assert response.status_code == 401
+    api.add_router("/items", router)
+    client = TestClient(api)
 
-    def test_list_books(self, db):
-        response = client.get("/", headers={"Authorization": "Bearer demo"})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["ok"] is True
-        assert "items" in data["data"]
+    resp = client.get("/items", headers={"Authorization": "Bearer demo"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["items"][0]["id"] == 1
 
-    def test_404_shape(self, db):
-        response = client.get("/9999", headers={"Authorization": "Bearer demo"})
-        assert response.status_code == 404
-        body = response.json()
-        assert body["ok"] is False
-        assert "error" in body
+def test_rate_limit():
+    from ninja_boost.rate_limiting import _reset_backend
+    _reset_backend()                               # fresh backend per test
 
-    def test_create_book(self, db):
-        payload = {
-            "title": "1984", "author": "Orwell", "isbn": "9780451524935",
-            "price": "9.99", "published": "1949-06-08"
-        }
-        response = client.post("/", json=payload,
-                               headers={"Authorization": "Bearer demo"})
-        assert response.status_code == 200
-        assert response.json()["data"]["title"] == "1984"
-```
+    @router.get("/limited")
+    @rate_limit("2/minute")
+    def limited(request, ctx): return {"ok": True}
 
-### Testing pagination
+    for i in range(2):
+        resp = client.get("/limited", headers={"Authorization": "Bearer demo"})
+        assert resp.status_code == 200
 
-```python
-# tests/test_pagination.py
-from unittest.mock import MagicMock
-from ninja_boost.pagination import auto_paginate
+    resp = client.get("/limited", headers={"Authorization": "Bearer demo"})
+    assert resp.status_code == 429
 
-def make_request(page=1, size=20):
-    r = MagicMock()
-    r.GET = {"page": str(page), "size": str(size)}
-    return r
+def test_permission_denied():
+    @router.get("/admin")
+    @require(IsStaff)
+    def admin_view(request, ctx): return {"data": "secret"}
 
-def test_paginates_list():
-    @auto_paginate
-    def view(request): return list(range(50))
-
-    result = view(make_request(page=2, size=10))
-    assert result["items"] == list(range(10, 20))
-    assert result["total"] == 50
-    assert result["pages"] == 5
-
-def test_queryset_uses_count_not_len():
-    """Verify .count() is used — never len() which loads the whole table."""
-    from ninja_boost.pagination import _is_queryset
-
-    mock_qs = MagicMock()
-    mock_qs.count.return_value = 1000
-    mock_qs.__getitem__ = lambda self, sl: []
-    mock_qs.filter = MagicMock()
-    mock_qs.values = MagicMock()
-    assert _is_queryset(mock_qs)
-
-    @auto_paginate
-    def view(request): return mock_qs
-
-    view(make_request())
-    mock_qs.count.assert_called_once()   # must use .count()
-```
-
-### Overriding NINJA_BOOST in tests
-
-```python
-from django.test import override_settings
-from ninja_boost.conf import boost_settings
-
-def test_custom_auth():
-    with override_settings(NINJA_BOOST={"AUTH": "tests.auth.MockAuth"}):
-        boost_settings.reload()   # clear the import cache after override
-        assert boost_settings.AUTH.__name__ == "MockAuth"
-    boost_settings.reload()       # restore defaults after the test
+    resp = client.get("/admin", headers={"Authorization": "Bearer demo"})
+    assert resp.status_code == 403
+    assert resp.json()["ok"] is False
 ```
 
 ---
 
 ## Deployment
 
-### Environment variables
-
-Never put secrets in `settings.py`. Use environment variables:
-
-```bash
-pip install django-environ
-```
-
-```python
-# settings.py
-import environ
-
-env = environ.Env(DEBUG=(bool, False))
-environ.Env.read_env(".env")
-
-SECRET_KEY   = env("SECRET_KEY")
-DEBUG        = env("DEBUG")
-DATABASES    = {"default": env.db()}
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
-```
-
-```bash
-# .env  ← never commit this file
-SECRET_KEY=your-very-long-random-secret-key
-DEBUG=False
-DATABASE_URL=postgres://user:pass@localhost/dbname
-ALLOWED_HOSTS=api.yourdomain.com
-```
-
-Generate a new secret key:
-
-```bash
-python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-```
-
 ### Production settings
 
 ```python
-# settings/production.py
+# myproject/settings/production.py
 from .base import *
 
-DEBUG        = False
-ALLOWED_HOSTS = env.list("ALLOWED_HOSTS")
-SECRET_KEY   = env("SECRET_KEY")
+DEBUG = False
 
-DATABASES = {
-    "default": {
-        "ENGINE":   "django.db.backends.postgresql",
-        "NAME":     env("DB_NAME"),
-        "USER":     env("DB_USER"),
-        "PASSWORD": env("DB_PASSWORD"),
-        "HOST":     env("DB_HOST", default="localhost"),
-        "PORT":     env("DB_PORT", default="5432"),
-    }
-}
+NINJA_BOOST = {
+    "AUTH":             "myproject.auth.JWTAuth",
+    "RESPONSE_WRAPPER": "ninja_boost.responses.wrap_response",
+    "PAGINATION":       "ninja_boost.pagination.auto_paginate",
+    "DI":               "ninja_boost.dependencies.inject_context",
 
-# HTTPS
-SECURE_SSL_REDIRECT            = True
-SESSION_COOKIE_SECURE          = True
-CSRF_COOKIE_SECURE             = True
-SECURE_HSTS_SECONDS            = 31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-
-# Structured logging
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {
-        "console": {"class": "logging.StreamHandler"},
+    "RATE_LIMIT": {
+        "DEFAULT": "200/minute",
+        "BACKEND": "ninja_boost.rate_limiting.CacheBackend",    # Redis in production
     },
-    "root": {"handlers": ["console"], "level": "INFO"},
+
+    "METRICS": {
+        "BACKEND":   "ninja_boost.metrics.PrometheusBackend",
+        "NAMESPACE": "myapi",
+    },
+
+    "DOCS": {
+        "REQUIRE_STAFF":         True,          # staff only in production
+        "DISABLE_IN_PRODUCTION": False,         # change to True for fully private APIs
+    },
+
+    "PLUGINS": [
+        "myproject.plugins.SentryPlugin",
+        "myproject.plugins.AuditPlugin",
+    ],
 }
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "ninja_boost.middleware.TracingMiddleware",
+    "ninja_boost.lifecycle.LifecycleMiddleware",
+]
 ```
 
 ### Docker
 
 ```dockerfile
-# Dockerfile
 FROM python:3.12-slim
-WORKDIR /app
 
+WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN python manage.py collectstatic --no-input
+RUN python manage.py collectstatic --noinput
 
-EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8000/api/health/live || exit 1
+
 CMD ["gunicorn", "myproject.wsgi:application", \
-     "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120"]
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "4", \
+     "--timeout", "30", \
+     "--access-logfile", "-"]
 ```
 
-```yaml
-# docker-compose.yml
-version: "3.9"
-services:
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_DB:       myapi
-      POSTGRES_USER:     myapi
-      POSTGRES_PASSWORD: secret
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  web:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      SECRET_KEY:   your-secret-key
-      DATABASE_URL: postgres://myapi:secret@db/myapi
-      DEBUG:        "False"
-    depends_on:
-      - db
-    command: >
-      sh -c "python manage.py migrate &&
-             gunicorn myproject.wsgi:application --bind 0.0.0.0:8000"
-
-volumes:
-  postgres_data:
-```
+### ASGI with uvicorn
 
 ```bash
-docker-compose up --build
+pip install uvicorn[standard]
+uvicorn myproject.asgi:application --host 0.0.0.0 --port 8000 --workers 4 --proxy-headers
+```
+
+### Environment variables
+
+```python
+import os
+
+NINJA_BOOST = {
+    "AUTH": os.environ.get("API_AUTH_CLASS", "myproject.auth.JWTAuth"),
+    "RATE_LIMIT": {
+        "DEFAULT": os.environ.get("API_RATE_LIMIT", "200/minute"),
+        "BACKEND": (
+            "ninja_boost.rate_limiting.CacheBackend"
+            if os.environ.get("REDIS_URL")
+            else "ninja_boost.rate_limiting.InMemoryBackend"
+        ),
+    },
+}
 ```
 
 ---
 
 ## CLI reference
 
-The `ninja-boost` CLI is installed automatically with the package.
+```
+ninja-boost startproject <name>     Scaffold a complete new project
+ninja-boost startapp <name>         Scaffold a new app in apps/<name>/
+ninja-boost config                  Print a starter NINJA_BOOST settings block
+```
 
-### `ninja-boost startproject <name>`
-
-Scaffolds a complete, ready-to-run Django project:
-
+**Scaffold a project:**
 ```bash
 ninja-boost startproject bookstore
 cd bookstore
@@ -1526,452 +1794,181 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-**Generated structure:**
-
-```
-bookstore/
-├── manage.py
-├── requirements.txt
-├── pytest.ini
-├── apps/
-│   └── __init__.py
-└── bookstore/
-    ├── __init__.py
-    ├── settings.py      # NINJA_BOOST pre-configured with defaults
-    ├── urls.py          # AutoAPI + register_exception_handlers wired
-    ├── wsgi.py
-    └── asgi.py
-```
-
----
-
-### `ninja-boost startapp <name>`
-
-Scaffolds a new app inside `apps/<name>/`:
-
+**Scaffold an app:**
 ```bash
+cd myproject
 ninja-boost startapp products
-```
-
-**Generated structure:**
-
-```
-apps/
-  products/
-    __init__.py
-    apps.py           # Django AppConfig
-    models.py         # empty scaffold
-    admin.py          # empty scaffold
-    schemas.py        # ProductOut, ProductCreate, ProductUpdate
-    services.py       # ProductService with list/get/create stubs
-    routers.py        # AutoRouter with routes already wired to services
-    migrations/
-      __init__.py
-```
-
-**After `startapp`, do these three things:**
-
-```python
-# 1. settings.py
-INSTALLED_APPS += ["apps.products"]
-
-# 2. urls.py
-from apps.products.routers import router as products_router
-api.add_router("/products", products_router)
-```
-
-```bash
-# 3. Shell
-python manage.py makemigrations products
-python manage.py migrate
-```
-
----
-
-### `ninja-boost config`
-
-Prints a starter `NINJA_BOOST` settings block to copy into your `settings.py`:
-
-```bash
-ninja-boost config
+# → apps/products/__init__.py
+# → apps/products/routers.py       (AutoRouter with CRUD stubs)
+# → apps/products/schemas.py       (Pydantic in/out schemas)
+# → apps/products/services.py      (service class stub)
+# → apps/products/models.py
+# → apps/products/apps.py
+# → apps/products/migrations/__init__.py
 ```
 
 ---
 
 ## Security considerations
 
-### Replace the demo auth before going live
+1. **Replace `BearerTokenAuth` before going to production.** The default auth accepts the literal token `"demo"` and is intentionally insecure. Swap in a real JWT, session, or API-key authenticator.
 
-`BearerTokenAuth` accepts the literal string `"demo"`. It exists for local development only. Always configure a real auth backend before any deployment:
+2. **Set `ALLOWED_HOSTS`** in production settings.
 
-```python
-NINJA_BOOST = {
-    "AUTH": "myproject.auth.JWTAuth",   # your real implementation
-}
-```
+3. **Protect the docs** with `NINJA_BOOST["DOCS"]["DISABLE_IN_PRODUCTION"] = True` or `REQUIRE_STAFF = True`.
 
-### Secret key management
+4. **Use HTTPS in production.** Set `SECURE_SSL_REDIRECT = True` and configure TLS termination at the load balancer.
 
-- Never commit `SECRET_KEY` to version control
-- Use a different `SECRET_KEY` in each environment (local, staging, production)
-- Rotate the key periodically; existing sessions will be invalidated
+5. **Rate limit sensitive endpoints** (login, password reset, send-email) with tight limits like `"5/minute"`.
 
-### X-Forwarded-For trust
+6. **Use `CacheBackend` with Redis** for rate limiting in multi-process deployments — `InMemoryBackend` is per-process.
 
-`inject_context` reads `X-Forwarded-For` to determine the real client IP. If your server is directly on the internet (not behind a trusted proxy), this header can be spoofed. Write a custom DI function that reads only `REMOTE_ADDR`:
-
-```python
-# myproject/dependencies.py
-def inject_context_direct_ip(func):
-    """For servers not behind a proxy — ignores X-Forwarded-For."""
-    @wraps(func)
-    def wrapper(request, *args, **kwargs):
-        ctx = {
-            "user":     getattr(request, "auth", None),
-            "ip":       request.META.get("REMOTE_ADDR", ""),   # no XFF
-            "trace_id": getattr(request, "trace_id", None),
-        }
-        return func(request, ctx, *args, **kwargs)
-    return wrapper
-```
-
-### Rate limiting
-
-`ninja_boost` does not include rate limiting. Add it at the proxy layer (nginx, Cloudflare) or with a Django package:
-
-```bash
-pip install django-ratelimit
-```
-
-```python
-from django_ratelimit.decorators import ratelimit
-
-@ratelimit(key="ip", rate="100/h", block=True)
-@router.get("/search")
-def search(request, ctx, q: str):
-    ...
-```
+7. **Pin your `SECRET_KEY`** and rotate it by deploying without old tokens being valid (implement token expiry).
 
 ---
 
 ## Performance notes
 
-### Always return a QuerySet from list endpoints
-
-```python
-# ✅ Two SQL queries regardless of table size
-@router.get("/books")
-def list_books(request, ctx):
-    return Book.objects.filter(in_stock=True)   # returns QuerySet
-
-# ❌ Loads entire table into memory before paginating
-@router.get("/books")
-def list_books(request, ctx):
-    return list(Book.objects.filter(in_stock=True))   # returns list
-```
-
-### Use select_related / prefetch_related
-
-```python
-class OrderService:
-    @staticmethod
-    def list_orders():
-        return (
-            Order.objects
-            .select_related("customer", "shipping_address")
-            .prefetch_related("items__product")
-            .filter(status="active")
-        )
-```
-
-### BoostSettings caches resolved classes
-
-`NINJA_BOOST` values are resolved once via `import_string` and cached. There is no per-request overhead from the settings proxy.
-
-### Keep DI decorators cheap
-
-The DI context decorator runs on every authenticated request. Avoid database queries inside it unless absolutely necessary. Fetch permissions lazily inside views that need them, or cache them on the request object.
+- **Pagination:** always uses `QuerySet.count()` + slice — two SQL queries maximum. Never calls `len()` on a QuerySet.
+- **Rate limiting (InMemoryBackend):** O(n) sliding window cleanup — suitable for <1M unique rate-limit keys. For higher key counts, use `CacheBackend` with Redis (O(1) per request).
+- **Event bus:** O(n) over registered handlers per event. Handler exceptions are swallowed. For hot paths, keep handler count <10 and handlers fast.
+- **Context injection:** adds ~0.5µs overhead (one dict construction per request).
+- **Caching:** `cache_response` uses MD5 to hash keys — negligible CPU cost.
+- **Structured logging:** uses `contextvars` (single `ContextVar.get()` per log record) — faster than threadlocals.
 
 ---
 
 ## Troubleshooting & FAQ
 
-**Q: `ImproperlyConfigured: [ninja_boost] NINJA_BOOST settings is missing keys`**
-
-You have a partial `NINJA_BOOST` dict that is missing one or more of the four required keys. Either remove the dict entirely (all defaults are used), or include all four keys. Run `ninja-boost config` to see the full block.
-
----
-
-**Q: My views aren't receiving `ctx` — I get a `TypeError` about unexpected arguments**
-
-Your router must be `AutoRouter`, not the vanilla `Router`:
+**Q: My views are getting paginated but I don't want that on a specific route.**
 
 ```python
-# Wrong:
-from ninja import Router
-router = Router()
-
-# Correct:
-from ninja_boost import AutoRouter
-router = AutoRouter()
+@router.post("/", response=UserOut, paginate=False)
+def create_user(request, ctx, payload: UserCreate):
+    ...
 ```
 
----
+**Q: I'm getting `ImproperlyConfigured` on startup.**
 
-**Q: I'm getting 401 on every request even when I send a token**
+If you set any of the four core keys (`AUTH`, `RESPONSE_WRAPPER`, `PAGINATION`, `DI`), you must set all four. Either provide all four or remove your partial `NINJA_BOOST` config entirely (defaults will kick in).
 
-The default `BearerTokenAuth` only accepts the literal string `"demo"`. Test with:
+**Q: `ctx["user"]` is `None` even though I'm sending a valid token.**
 
-```bash
-curl -H "Authorization: Bearer demo" http://localhost:8000/api/your-endpoint/
-```
+Your auth class's `authenticate()` method returned `None`. Check that the token is valid and your auth class is configured in `NINJA_BOOST["AUTH"]`. Use `@router.get("/debug", auth=None)` temporarily to test without auth.
 
-In production, point `NINJA_BOOST["AUTH"]` at your real auth class.
+**Q: Rate limiting doesn't work across multiple gunicorn workers.**
 
----
-
-**Q: My paginated endpoint returns a single object instead of a pagination envelope**
-
-You returned a dict instead of a list or QuerySet. `auto_paginate` passes dicts through untouched. Fix your service:
-
+Switch to `CacheBackend` — `InMemoryBackend` is process-local. Install Redis and set:
 ```python
-# Wrong — returns a dict
-def list_books(): return {"books": [...]}
-
-# Correct — returns a QuerySet
-def list_books(): return Book.objects.all()
-
-# Also correct — returns a list
-def list_books(): return [book1, book2, book3]
+NINJA_BOOST = {"RATE_LIMIT": {"BACKEND": "ninja_boost.rate_limiting.CacheBackend"}}
 ```
 
----
+**Q: I need cursor-based pagination instead of page/size.**
 
-**Q: How do I make a completely public endpoint?**
-
-Use `auth=None` on the route:
-
+Point `PAGINATION` at your custom decorator:
 ```python
-@router.get("/public", response=list[ItemOut], auth=None)
-def public_items(request):
-    return Item.objects.filter(featured=True)
+NINJA_BOOST = {"PAGINATION": "myproject.pagination.cursor_paginate", ...}
 ```
 
-Note: `ctx["user"]` will be `None` on public endpoints, but `ctx` is still injected if `inject=True` (the default). Use `inject=False` if you don't need ctx at all.
+**Q: Can I use ninja-boost alongside existing vanilla Django Ninja routers?**
 
----
+Yes. `AutoRouter` and `Router` can be added to the same `NinjaAPI`/`AutoAPI` instance. Only `AutoRouter` routes get auto-wired features.
 
-**Q: Can I use `ninja_boost` with `django-ninja-extra` (class-based views)?**
+**Q: Can I use ninja-boost in an existing Django project that already has NinjaAPI?**
 
-Yes. They are fully compatible. `AutoAPI` can host controllers from `django-ninja-extra` alongside function-based `AutoRouter` routes.
-
----
-
-**Q: Does `ninja_boost` support async views?**
-
-The current `inject_context` and `auto_paginate` decorators are synchronous. They wrap sync view functions correctly. Async view support is planned for a future release.
-
----
-
-**Q: Will error responses get double-wrapped by AutoAPI?**
-
-No. `AutoAPI.create_response` checks whether the data already contains an `"ok"` key. If it does, it skips the `wrap_response` call. Error handlers and success responses are always clean.
-
----
-
-**Q: I changed `NINJA_BOOST` in a test but the old values are still being used**
-
-The settings proxy caches resolved classes. Call `boost_settings.reload()` after changing settings in a test:
-
-```python
-from ninja_boost.conf import boost_settings
-from django.test import override_settings
-
-with override_settings(NINJA_BOOST={"AUTH": "tests.auth.MockAuth"}):
-    boost_settings.reload()
-    # test your code here
-boost_settings.reload()   # restore defaults
-```
-
----
-
-**Q: How do I bypass the response envelope for one specific endpoint?**
-
-Return a Django `HttpResponse` directly — it bypasses `AutoAPI.create_response` entirely:
-
-```python
-from django.http import JsonResponse
-
-@router.get("/raw", auth=None, inject=False, paginate=False)
-def raw(request):
-    return JsonResponse({"custom": "shape", "no": "envelope"})
-```
-
----
-
-## How it relates to Django Ninja
-
-`django-ninja-boost` does not fork or patch Django Ninja. It uses standard Python subclassing:
-
-```
-pip install django-ninja          ← upstream, untouched, receives updates normally
-    NinjaAPI  ←──── AutoAPI subclasses this      (adds: default auth, response envelope)
-    Router    ←──── AutoRouter subclasses this   (adds: per-operation auth, DI, pagination)
-    Schema          unchanged — use as normal
-    HttpBearer      unchanged — subclass for custom auth
-
-pip install django-ninja-boost    ← our automation layer
-    AutoAPI         + default auth, response envelope
-    AutoRouter      + per-operation auth, DI, pagination
-    inject_context  request context injection
-    auto_paginate   transparent list/QuerySet pagination
-    wrap_response   standard {"ok": true, "data": ...} envelope
-    TracingMiddleware  UUID trace IDs on every request
-```
-
-When Django Ninja releases a new version with new features or bug fixes, you get those immediately — there is no compatibility lag from `ninja_boost`.
+Yes. Swap `NinjaAPI` for `AutoAPI` in one place (urls.py). Existing routers are unaffected.
 
 ---
 
 ## Comparison table
 
-### vs vanilla Django Ninja
-
-| Task | Vanilla Django Ninja | With ninja_boost |
-|------|---------------------|-----------------|
-| Add auth to a route | `auth=JWTAuth()` on every `@router.get` | Once in `NINJA_BOOST["AUTH"]` |
-| Consistent response shape | Write `{"ok": True, "data": ...}` in every view | Automatic |
-| Paginate a QuerySet | ~15 lines of boilerplate per endpoint | Return the QuerySet |
-| Access authenticated user | `request.auth` everywhere | `ctx["user"]` |
-| Get client IP (proxy-aware) | Custom code per endpoint | `ctx["ip"]` |
-| Per-request trace ID | Build custom middleware | `TracingMiddleware` + `ctx["trace_id"]` |
-| Standard error shape | Write custom exception handlers per project | `register_exception_handlers(api)` |
-| Catch unhandled 500s cleanly | Manual try/except or middleware | Included in `register_exception_handlers` |
-
-### vs django-ninja-extra
-
-[`django-ninja-extra`](https://pypi.org/project/django-ninja-extra/) and `django-ninja-boost` solve different problems and are fully compatible with each other.
-
-| | `django-ninja-extra` | `django-ninja-boost` |
-|-|----------------------|----------------------|
-| Programming model | Class-based controllers | Function-based routes |
-| Dependency injection | Constructor injection via `injector` lib | Request context dict (`ctx`) |
-| Auth wiring | Per-controller decorator | Settings-driven, zero decorator |
-| Response envelope | Manual | Automatic |
-| Pagination | Manual | Automatic |
-| Distributed tracing | Not included | `TracingMiddleware` |
-| Scaffolding CLI | Not included | `ninja-boost startproject/startapp` |
-
----
-
-## Project structure
-
-```
-django-ninja-boost/
-├── src/
-│   └── ninja_boost/
-│       ├── __init__.py        public API surface
-│       ├── api.py             AutoAPI subclass
-│       ├── apps.py            Django AppConfig + startup validation
-│       ├── cli.py             ninja-boost CLI
-│       ├── conf.py            lazy BoostSettings proxy with defaults
-│       ├── dependencies.py    inject_context decorator
-│       ├── exceptions.py      register_exception_handlers
-│       ├── integrations.py    BearerTokenAuth (demo, replace in production)
-│       ├── middleware.py      TracingMiddleware
-│       ├── pagination.py      auto_paginate decorator
-│       ├── py.typed           PEP 561 marker for type checkers
-│       ├── responses.py       wrap_response function
-│       └── router.py          AutoRouter subclass
-├── template/                  starter project (used by CLI)
-├── tests/
-│   ├── conftest.py
-│   └── test_core.py
-├── .github/workflows/
-│   └── test.yml               CI: Python 3.10-3.12 × Django 4.2-5.0
-├── pyproject.toml
-├── MANIFEST.in
-├── LICENSE
-└── README.md
-```
-
----
-
-## Contributing
-
-Issues and pull requests are welcome.
-
-```bash
-git clone https://github.com/bensylvenus/django-ninja-boost
-cd django-ninja-boost
-pip install -e ".[dev]"
-pytest --cov=ninja_boost tests/
-```
-
-Before opening a PR: all tests pass, new behaviour is covered by a test, docstrings updated for any changed public function signature.
-
-**Reporting bugs** — please include Python version, Django version, django-ninja version, django-ninja-boost version, and a minimal reproduction case.
-
----
-
-## Publishing to PyPI
-
-```bash
-pip install build twine
-
-# Build wheel + source distribution
-python -m build
-
-# Validate the distribution
-twine check dist/*
-
-# Upload to TestPyPI first
-twine upload --repository testpypi dist/*
-pip install --index-url https://test.pypi.org/simple/ django-ninja-boost
-
-# Upload to production PyPI
-twine upload dist/*
-```
+| Feature | Django Ninja (bare) | django-ninja-boost |
+|---------|--------------------|--------------------|
+| Auto auth wiring | ❌ Manual per-route | ✅ Settings-driven |
+| Response envelope | ❌ Manual | ✅ Automatic |
+| Pagination | ❌ Manual 6+ lines | ✅ Automatic |
+| Context injection | ❌ `request.auth` manually | ✅ `ctx["user"]`, `ctx["ip"]`, `ctx["trace_id"]` |
+| Trace IDs | ❌ No built-in | ✅ `TracingMiddleware` |
+| Rate limiting | ❌ Separate package | ✅ `@rate_limit("N/period")` |
+| Permissions | ❌ Inline if-checks | ✅ `@require(IsStaff)` |
+| Policies | ❌ Scattered per-view | ✅ Resource policy classes |
+| Event hooks | ❌ No built-in | ✅ `event_bus.on("before_request")` |
+| Plugin system | ❌ No built-in | ✅ `BoostPlugin` base class |
+| DI container | ❌ No built-in | ✅ Service registry |
+| Structured logs | ❌ Manual formatter | ✅ Auto-enriched JSON logs |
+| Metrics | ❌ SDK-specific setup | ✅ Pluggable backends |
+| Async views | ✅ Built-in | ✅ + auto-detected wrappers |
+| Health checks | ❌ DIY | ✅ `/health/live` + `/health/ready` |
+| Response caching | ❌ Manual | ✅ `@cache_response(ttl=60)` |
+| API versioning | ❌ Manual URL routing | ✅ `VersionedRouter`, `versioned_api()` |
+| Docs access control | ❌ No built-in | ✅ IP allowlist, staff-only |
+| CLI scaffolding | ❌ No built-in | ✅ `ninja-boost startproject/startapp` |
+| Zero breaking changes | N/A | ✅ Fully additive, opt-out per route |
 
 ---
 
 ## Changelog
 
-### 0.1.0 — Initial Release
+### 0.2.0 (2026-02-24)
 
-**New features:**
-- `AutoAPI` — drop-in `NinjaAPI` subclass; auto-wires default auth and response envelope
-- `AutoRouter` — per-operation auto-wiring of auth, DI, and pagination; opt-outs via `auth=None`, `inject=False`, `paginate=False`
-- `inject_context` — injects `ctx = {"user", "ip", "trace_id"}` into every view; X-Forwarded-For aware
-- `auto_paginate` — transparent `?page=&size=` pagination; uses `.count()` on QuerySets (no full table loads); ceiling division for page count
-- `wrap_response` — standard `{"ok": True, "data": ...}` envelope
-- `TracingMiddleware` — UUID trace IDs on every request + `X-Trace-Id` response header
-- `register_exception_handlers` — consistent `{"ok": false, "error": ..., "code": ...}` for `HttpError` and generic exceptions
-- `BearerTokenAuth` — demo auth backend for local development
-- `NinjaBoostConfig` — Django `AppConfig` with startup validation of `NINJA_BOOST` settings
-- `BoostSettings` — lazy settings proxy; import cache; `reload()` for tests
-- `ninja-boost` CLI — `startproject`, `startapp`, `config` commands
+**New modules (11):**
+- `events` — pub/sub event bus with sync + async handlers
+- `plugins` — plugin base class and registry, auto-wired to events
+- `rate_limiting` — `@rate_limit("N/period")` with InMemory + Cache backends
+- `permissions` — declarative permission classes, `@require()` decorator
+- `policies` — resource policy registry, `@policy()` decorator
+- `services` — service DI container, `@inject_service()` decorator
+- `logging_structured` — `StructuredJsonFormatter`, access log, context binding
+- `metrics` — Prometheus / StatsD / Logging backends, `@track()` decorator
+- `async_support` — auto-detected async DI, pagination, rate limit, permissions
+- `lifecycle` — `LifecycleMiddleware` single-point lifecycle coordinator
+- `health` — `/health/live` + `/health/ready` with custom checks
+- `caching` — `@cache_response()` with Django cache backend integration
+- `versioning` — `VersionedRouter`, `versioned_api()`, `@deprecated`, `@require_version`
+- `docs` — `DocGuard`, `harden_docs()`, security scheme injection
 
-**Bug fixes over the original template:**
-- `UserCreate(schema)` → `UserCreate(Schema)` — `schema` was an undefined name
-- `urls.py` imported `apps.users.routers` (non-existent path) — corrected
-- `AutoAPI.__init__` stored AUTH class not instance — NinjaAPI `auth=` requires an instance
-- `auto_paginate` called `len(queryset)` causing full table loads — now uses `.count()` + slice
-- CLI entry point referenced non-existent file — `cli.py` created from scratch
-- `Apps` missing from `INSTALLED_APPS` — corrected
-- `docker-compose.yml` contained stray markdown text making it invalid YAML — cleaned
-- Package name inconsistency across files — unified to `django-ninja-boost` / `ninja_boost`
-- `AutoAPI.create_response` could double-wrap error responses — fixed with `"ok" in data` guard
-- No `AppConfig` for Django app discovery — added `ninja_boost/apps.py`
+**Updated modules:**
+- `api` — fires plugin startup + docs hardening on init
+- `router` — async-aware, global rate limit wiring
+- `dependencies` — service registry enrichment, `before_request` event emission
+- `middleware` — emits `after_response` event
+- `exceptions` — emits `on_error` event, trace_id in logs
+- `apps` — auto-loads plugins/policies/services, wires default event handlers
+- `conf` — full settings reference, `get()` method for non-import keys
+- `__init__` — exports all new public API
+
+**Version bump:** `0.1.0` → `0.2.0`
+
+### 0.1.0 (initial release)
+
+- `AutoAPI`, `AutoRouter`, `inject_context`, `auto_paginate`
+- `TracingMiddleware`, `register_exception_handlers`
+- `BearerTokenAuth`, `wrap_response`
+- `ninja-boost startproject/startapp/config` CLI
+
+---
+
+## Contributing
+
+Contributions are welcome!
+
+```bash
+git clone https://github.com/bensylvenus/django-ninja-boost
+cd django-ninja-boost
+pip install -e ".[dev]"
+pytest
+```
+
+Areas where help is appreciated:
+- More metrics backends (Datadog, CloudWatch, OpenTelemetry)
+- GraphQL support exploration
+- More built-in permission classes
+- Documentation improvements and recipes
+
+Please open an issue before submitting large PRs to discuss the approach.
 
 ---
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-Copyright (c) 2025 Benjamin Sylvester
-
----
-
-*If `django-ninja-boost` saves you time, a ⭐ on [GitHub](https://github.com/bensylvenus/django-ninja-boost) goes a long way.*

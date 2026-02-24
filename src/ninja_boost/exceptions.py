@@ -1,22 +1,26 @@
 """
 ninja_boost.exceptions
 ~~~~~~~~~~~~~~~~~~~~~~
-Standard exception handler registration.
+Standard exception handler registration with event emission.
 
 Call ``register_exception_handlers(api)`` once after creating your AutoAPI
-instance to get consistent error envelopes across all endpoints::
+instance::
 
     api = AutoAPI()
     register_exception_handlers(api)
 
 Error envelope shape::
 
-    {"ok": False, "error": "<human readable message>", "code": <http status>}
+    {"ok": False, "error": "<human readable>", "code": <http status>}
 
-The ``"ok"`` key prevents AutoAPI.create_response from double-wrapping errors.
+The ``"ok"`` key prevents AutoAPI.create_response from double-wrapping.
 """
 
+import logging
+
 from ninja.errors import HttpError
+
+logger = logging.getLogger("ninja_boost.exceptions")
 
 
 def register_exception_handlers(api) -> None:
@@ -24,6 +28,11 @@ def register_exception_handlers(api) -> None:
 
     @api.exception_handler(HttpError)
     def handle_http(request, exc: HttpError):
+        logger.info(
+            "HttpError %s: %s [trace=%s]",
+            exc.status_code, exc.message,
+            getattr(request, "trace_id", "-"),
+        )
         return api.create_response(
             request,
             {"ok": False, "error": str(exc.message), "code": exc.status_code},
@@ -32,6 +41,22 @@ def register_exception_handlers(api) -> None:
 
     @api.exception_handler(Exception)
     def handle_generic(request, exc: Exception):
+        logger.exception(
+            "Unhandled exception [trace=%s]",
+            getattr(request, "trace_id", "-"),
+        )
+        # Fire on_error event for plugins / Sentry / alerting
+        try:
+            from ninja_boost.events import event_bus, ON_ERROR
+            ctx = {
+                "trace_id": getattr(request, "trace_id", None),
+                "ip":       request.META.get("REMOTE_ADDR"),
+                "user":     getattr(request, "auth", None),
+            }
+            event_bus.emit(ON_ERROR, request=request, ctx=ctx, exc=exc)
+        except Exception:
+            pass
+
         return api.create_response(
             request,
             {"ok": False, "error": "Internal server error.", "code": 500},

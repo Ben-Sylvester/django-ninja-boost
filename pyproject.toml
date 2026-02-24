@@ -4,14 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-ninja-boost"
-version = "0.1.0"
-description = "Zero-boilerplate automation layer for Django Ninja — auto-wires auth, response envelopes, pagination, DI, and tracing."
+version = "0.2.0"
+description = "Production automation layer for Django Ninja — auto-wires auth, envelopes, pagination, DI, rate limiting, permissions, policies, services, events, structured logging, metrics, and docs hardening."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "Benjamin Sylvester", email = "bensylvenus@gmail.com"}]
 keywords = [
     "django", "django-ninja", "fastapi", "api", "rest",
-    "dependency-injection", "pagination", "auto-wiring", "middleware"
+    "dependency-injection", "pagination", "auto-wiring", "middleware",
+    "rate-limiting", "permissions", "policies", "events", "metrics",
+    "structured-logging", "async",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -38,18 +40,32 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+prometheus = ["prometheus_client>=0.16"]
+statsd     = ["statsd>=4.0"]
+redis      = ["django-redis>=5.0"]
+async      = ["uvicorn>=0.20", "anyio>=3.0"]
 dev = [
     "pytest>=7.0",
     "pytest-django>=4.5",
+    "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+all = [
+    "prometheus_client>=0.16",
+    "statsd>=4.0",
+    "django-redis>=5.0",
+    "uvicorn>=0.20",
 ]
 
 [project.urls]
-Homepage     = "https://github.com/bensylvenus/django-ninja-boost"
+Homepage      = "https://github.com/bensylvenus/django-ninja-boost"
 Documentation = "https://github.com/bensylvenus/django-ninja-boost#readme"
-Repository   = "https://github.com/bensylvenus/django-ninja-boost"
-Issues       = "https://github.com/bensylvenus/django-ninja-boost/issues"
-Changelog    = "https://github.com/bensylvenus/django-ninja-boost/blob/main/CHANGELOG.md"
+Repository    = "https://github.com/bensylvenus/django-ninja-boost"
+Issues        = "https://github.com/bensylvenus/django-ninja-boost/issues"
+Changelog     = "https://github.com/bensylvenus/django-ninja-boost/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ninja-boost = "ninja_boost.cli:main"
@@ -61,7 +77,8 @@ where = ["src"]
 "ninja_boost" = ["py.typed"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths         = ["tests"]
+asyncio_mode      = "auto"
 
 [tool.coverage.run]
 source = ["ninja_boost"]
@@ -69,4 +86,13 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 80
+fail_under   = 80
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true

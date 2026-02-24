@@ -6,20 +6,15 @@ Request context dependency injection.
 ``inject_context`` wraps any view function and injects a ``ctx`` dict as the
 second positional argument (right after ``request``).
 
-The context dict contains:
-    ctx["user"]     → authenticated principal from request.auth
-    ctx["ip"]       → client IP (honours X-Forwarded-For for proxied setups)
-    ctx["trace_id"] → per-request UUID hex string set by TracingMiddleware
-                      (None if middleware is not installed)
+Context dict contents
+----------------------
+    ctx["user"]       → authenticated principal from request.auth
+    ctx["ip"]         → client IP (honours X-Forwarded-For)
+    ctx["trace_id"]   → per-request UUID hex (set by TracingMiddleware)
+    ctx["services"]   → {name: service_instance} from the service registry
+                        (only populated if services are registered)
 
-Usage in a router::
-
-    @router.get("/me", response=UserOut)
-    def me(request, ctx):
-        user_id = ctx["user"]["id"]   # depends on what your AUTH returns
-        return UserService.get(user_id)
-
-Opt out on a specific route with ``inject=False``::
+Opt out on a specific route::
 
     @router.get("/ping", inject=False, auth=None, paginate=False)
     def ping(request):
@@ -35,11 +30,27 @@ def inject_context(func):
 
     @wraps(func)
     def wrapper(request, *args, **kwargs) -> Any:
-        ctx = {
+        ctx: dict[str, Any] = {
             "user":     getattr(request, "auth", None),
             "ip":       _client_ip(request),
             "trace_id": getattr(request, "trace_id", None),
         }
+
+        # Enrich with service registry if any services are registered
+        try:
+            from ninja_boost.services import service_registry
+            if len(service_registry) > 0:
+                ctx["services"] = service_registry.build_context(request, ctx)
+        except Exception:
+            pass
+
+        # Fire before_request event
+        try:
+            from ninja_boost.events import event_bus, BEFORE_REQUEST
+            event_bus.emit(BEFORE_REQUEST, request=request, ctx=ctx)
+        except Exception:
+            pass
+
         return func(request, ctx, *args, **kwargs)
 
     return wrapper
