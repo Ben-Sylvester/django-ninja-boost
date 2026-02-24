@@ -34,14 +34,10 @@ class NinjaBoostConfig(AppConfig):
         self._load_policies()
         self._load_services()
 
-        # Auto-register health checks
-        self._load_health_checks()
-
-        # Wire default event bus handlers (access log, metrics)
+        # Wire default event bus handlers (structured logging, metrics)
         self._wire_default_handlers()
 
         logger.info("django-ninja-boost ready")
-
 
     # ── Validation ────────────────────────────────────────────────────────
 
@@ -84,18 +80,6 @@ class NinjaBoostConfig(AppConfig):
         except Exception:
             logger.exception("Failed to load services from settings")
 
-    @staticmethod
-    def _load_health_checks() -> None:
-        try:
-            from django.conf import settings
-            from ninja_boost.health import register_builtin_checks
-            cfg = getattr(settings, "NINJA_BOOST", {})
-            auto = cfg.get("HEALTH", {}).get("AUTO_CHECKS", ["database"])
-            if auto:
-                register_builtin_checks(auto)
-        except Exception:
-            logger.exception("Failed to register health checks")
-
     # ── Default event handlers ────────────────────────────────────────────
 
     @staticmethod
@@ -105,17 +89,14 @@ class NinjaBoostConfig(AppConfig):
         These are low-overhead and safe to enable unconditionally.
         """
         try:
-            from ninja_boost.events import event_bus, AFTER_RESPONSE, ON_ERROR
-            from ninja_boost.logging_structured import bind_request_context, BEFORE_REQUEST  # noqa: F401
+            from ninja_boost.events import event_bus, BEFORE_REQUEST, AFTER_RESPONSE, ON_ERROR
 
             # Structured logging: bind context on every request
-            from ninja_boost.events import BEFORE_REQUEST as BR
-
-            @event_bus.on(BR)
+            @event_bus.on(BEFORE_REQUEST)
             def _bind_log_ctx(request, ctx, **kw):
                 try:
-                    from ninja_boost.logging_structured import bind_request_context as _brc
-                    _brc(request, ctx)
+                    from ninja_boost.logging_structured import bind_request_context
+                    bind_request_context(request, ctx)
                 except Exception:
                     pass
 

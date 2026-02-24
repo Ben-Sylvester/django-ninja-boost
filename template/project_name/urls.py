@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from ninja_boost import AutoAPI
+from ninja_boost.api import AutoAPI
 from ninja_boost.exceptions import register_exception_handlers
 from apps.users.routers import router as users_router
 

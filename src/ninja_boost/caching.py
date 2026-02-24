@@ -62,6 +62,11 @@ logger = logging.getLogger("ninja_boost.caching")
 _SENTINEL = object()
 
 
+def _is_queryset(obj) -> bool:
+    """Detect Django QuerySets without importing the ORM (avoids circular deps)."""
+    return hasattr(obj, "count") and hasattr(obj, "filter") and hasattr(obj, "values")
+
+
 def _get_cache():
     from django.core.cache import caches
     from django.conf import settings
@@ -159,9 +164,22 @@ def cache_response(
             result = func(request, ctx, *args, **kwargs)
             request._cache_hit = False
 
+            # Evaluate Django QuerySets to lists before caching.
+            # QuerySets are lazy database cursors — they are not picklable and
+            # would go stale if cached. Materialising to a list makes them
+            # safe to store and still paginatable on retrieval.
+            if result is not None and _is_queryset(result):
+                result = list(result)
+
             # Only cache successful, non-None results
             if result is not None:
-                cache.set(cache_key, result, timeout=ttl)
+                try:
+                    cache.set(cache_key, result, timeout=ttl)
+                except Exception:
+                    logger.warning(
+                        "Cache set failed (result may not be picklable): func=%s",
+                        func.__qualname__, exc_info=True,
+                    )
 
             return result
 

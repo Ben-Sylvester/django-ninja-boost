@@ -73,15 +73,10 @@ class AutoRouter(Router):
         if "auth" not in kwargs:
             kwargs["auth"] = boost_settings.AUTH()
 
-        # ── Dependency injection ──────────────────────────────────────────
-        if kwargs.pop("inject", True):
-            if is_async_view:
-                from ninja_boost.async_support import async_inject_context
-                view_func = async_inject_context(view_func)
-            else:
-                view_func = boost_settings.DI(view_func)
-
-        # ── Global rate limit (if set in settings, per-route @rate_limit wins) ──
+        # ── Global rate limit ─────────────────────────────────────────────
+        # Applied BEFORE inject_context so that rate_limit's wrapper receives
+        # ctx as its second argument (injected by the outer inject_context call).
+        # Call chain: paginate → inject_context → rate_limit → view   ✓
         try:
             from ninja_boost.rate_limiting import _get_global_rate, apply_global_rate_limit
             global_rate = _get_global_rate()
@@ -89,6 +84,14 @@ class AutoRouter(Router):
                 view_func = apply_global_rate_limit(view_func, global_rate)
         except Exception:
             logger.debug("Global rate limit wiring skipped", exc_info=True)
+
+        # ── Dependency injection ──────────────────────────────────────────
+        if kwargs.pop("inject", True):
+            if is_async_view:
+                from ninja_boost.async_support import async_inject_context
+                view_func = async_inject_context(view_func)
+            else:
+                view_func = boost_settings.DI(view_func)
 
         # ── Pagination ────────────────────────────────────────────────────
         if kwargs.pop("paginate", True):
