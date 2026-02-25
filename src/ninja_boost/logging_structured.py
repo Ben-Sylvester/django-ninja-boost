@@ -237,15 +237,32 @@ class StructuredLoggingMiddleware:
         ]
     """
 
+    async_capable = True
+    sync_capable  = True
+
     def __init__(self, get_response):
+        import asyncio
         self.get_response = get_response
+        self._is_async    = asyncio.iscoroutinefunction(get_response)
 
     def __call__(self, request):
+        if self._is_async:
+            return self.__acall__(request)
+        return self._sync_call(request)
+
+    def _sync_call(self, request):
         start = time.perf_counter()
         bind_request_context(request)
-
         response = self.get_response(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        request_logger.log_response(request, response, duration_ms)
+        clear_request_context()
+        return response
 
+    async def __acall__(self, request):
+        start = time.perf_counter()
+        bind_request_context(request)
+        response = await self.get_response(request)
         duration_ms = (time.perf_counter() - start) * 1000
         request_logger.log_response(request, response, duration_ms)
         clear_request_context()

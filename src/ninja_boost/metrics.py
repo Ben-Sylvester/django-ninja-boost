@@ -246,6 +246,64 @@ class StatsDBackend(BaseMetricsBackend):
         self._client.timing(self._key(name, labels), value)  # StatsD uses timing for histograms
 
 
+# ── Datadog backend ───────────────────────────────────────────────────────
+
+class DatadogBackend(BaseMetricsBackend):
+    """
+    Datadog metrics backend via the ``datadog`` Python client.
+
+    Install::
+        pip install datadog
+
+    Usage::
+        NINJA_BOOST = {
+            "METRICS": {
+                "BACKEND": "ninja_boost.metrics.DatadogBackend",
+                "PREFIX": "myapi",
+                "HOST": "localhost",   # DogStatsD agent host (default: localhost)
+                "PORT": 8125,          # DogStatsD agent port (default: 8125)
+            }
+        }
+    """
+
+    def __init__(self, prefix: str = "ninja_boost",
+                 host: str = "localhost", port: int = 8125):
+        try:
+            from datadog import initialize, statsd as dd_statsd
+            initialize(statsd_host=host, statsd_port=port)
+            self._statsd = dd_statsd
+        except ImportError:
+            raise ImportError(
+                "DatadogBackend requires the datadog package. "
+                "Install it with: pip install datadog"
+            )
+        self._prefix = prefix
+
+    def _key(self, name: str, labels: dict | None) -> str:
+        key = f"{self._prefix}.{name}" if self._prefix else name
+        return key
+
+    def _tags(self, labels: dict | None) -> list:
+        if not labels:
+            return []
+        return [f"{k}:{v}" for k, v in labels.items()]
+
+    def increment(self, name, value=1, labels=None):
+        self._statsd.increment(self._key(name, labels), value, tags=self._tags(labels))
+
+    def decrement(self, name, value=1, labels=None):
+        self._statsd.decrement(self._key(name, labels), value, tags=self._tags(labels))
+
+    def gauge(self, name, value, labels=None):
+        self._statsd.gauge(self._key(name, labels), value, tags=self._tags(labels))
+
+    def timing(self, name, value_ms, labels=None):
+        self._statsd.timing(self._key(name, labels), value_ms, tags=self._tags(labels))
+
+    def histogram(self, name, value, labels=None):
+        self._statsd.histogram(self._key(name, labels), value, tags=self._tags(labels))
+
+
 # ── Metrics facade ────────────────────────────────────────────────────────
 
 class Metrics:
@@ -282,9 +340,21 @@ class Metrics:
         dotted = mc.get("BACKEND")
         if dotted:
             try:
+                import inspect
                 cls = import_string(dotted)
                 ns  = mc.get("NAMESPACE") or mc.get("PREFIX", "ninja_boost")
-                self._backend = cls(namespace=ns) if "namespace" in cls.__init__.__code__.co_varnames else cls()
+                # Pass the configured namespace/prefix to the backend constructor.
+                # PrometheusBackend and LoggingBackend use "namespace="; StatsDBackend uses "prefix=".
+                try:
+                    params = inspect.signature(cls.__init__).parameters
+                except (ValueError, TypeError):
+                    params = {}
+                if "namespace" in params:
+                    self._backend = cls(namespace=ns)
+                elif "prefix" in params:
+                    self._backend = cls(prefix=ns)
+                else:
+                    self._backend = cls()
             except Exception:
                 logger.exception("Failed to load metrics backend '%s'", dotted)
         return self._backend
@@ -378,7 +448,16 @@ def track(name: str | None = None, labels: dict | None = None):
         def list_items(request, ctx): ...
     """
     def decorator(func: Callable) -> Callable:
+        import asyncio as _asyncio
         metric_name = name or f"{func.__module__}.{func.__qualname__}".replace(".", "_")
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                metrics.increment(f"{metric_name}_calls", labels=labels)
+                with metrics.timer(f"{metric_name}_duration_ms", labels=labels):
+                    return await func(*args, **kwargs)
+            return async_wrapper
 
         @wraps(func)
         def wrapper(*args, **kwargs):

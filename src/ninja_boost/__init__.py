@@ -65,7 +65,7 @@ from ninja_boost.services import (
 # ── Metrics ───────────────────────────────────────────────────────────────
 from ninja_boost.metrics import (
     Metrics, metrics, track,
-    BaseMetricsBackend, LoggingBackend, PrometheusBackend, StatsDBackend,
+    BaseMetricsBackend, LoggingBackend, PrometheusBackend, StatsDBackend, DatadogBackend,
 )
 
 # ── Structured logging ────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ __all__ = [
 
     # Metrics
     "Metrics", "metrics", "track",
-    "BaseMetricsBackend", "LoggingBackend", "PrometheusBackend", "StatsDBackend",
+    "BaseMetricsBackend", "LoggingBackend", "PrometheusBackend", "StatsDBackend", "DatadogBackend",
 
     # Structured logging
     "StructuredJsonFormatter", "StructuredVerboseFormatter",

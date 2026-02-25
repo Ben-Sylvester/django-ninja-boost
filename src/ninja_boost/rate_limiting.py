@@ -220,7 +220,7 @@ def _resolve_key(key_spec: str | Callable | None, request, ctx: dict) -> str:
         return str(key_spec(request, ctx))
     if key_spec == "user":
         user = ctx.get("user") or {}
-        uid  = user.get("id") or user.get("user_id") if isinstance(user, dict) else getattr(user, "id", None)
+        uid  = (user.get("id") or user.get("user_id")) if isinstance(user, dict) else getattr(user, "id", None)
         if uid is None:
             # Fall back to IP for anonymous users
             return f"ip:{ctx.get('ip', 'unknown')}"

@@ -176,11 +176,7 @@ def _patch_docs_views(api: Any, guard: DocGuard) -> None:
     NinjaAPI exposes get_openapi_schema, docs_view, and redoc_view as methods
     on the instance. We wrap them to enforce the guard.
     """
-    from django.http import HttpResponse, HttpResponseNotFound, HttpResponseForbidden
-
-    original_openapi = getattr(api, "_get_openapi_schema", None) or getattr(api, "get_openapi_schema", None)
-    original_docs    = getattr(api, "_docs_view", None) or getattr(api, "docs_view", None)
-    original_redoc   = getattr(api, "_redoc_view", None) or getattr(api, "redoc_view", None)
+    from django.http import HttpResponseNotFound, HttpResponseForbidden
 
     def _guarded(original_view, request, *args, **kwargs):
         if not guard.is_allowed(request):
@@ -197,7 +193,10 @@ def _patch_docs_views(api: Any, guard: DocGuard) -> None:
 
     # NinjaAPI uses self.urls to bind views; we patch the bound view methods
     for attr_name in ("docs_view", "redoc_view"):
-        original = getattr(type(api), attr_name, None) or getattr(api, attr_name, None)
+        # Always fetch the bound method from the instance, not from type(api).
+        # Fetching from type(api) gives an unbound function which lacks `self`,
+        # so calling original(request) would fail with a TypeError.
+        original = getattr(api, attr_name, None)
         if original is not None and callable(original):
             # Store original and wrap
             setattr(api, f"_boost_original_{attr_name}", original)

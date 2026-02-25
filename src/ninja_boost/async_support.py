@@ -64,8 +64,11 @@ def is_async(func: Callable) -> bool:
 def ensure_sync(func: Callable) -> Callable:
     """
     Wrap an async function so it can be called synchronously.
-    Uses asyncio.run() in contexts without a running loop, or
-    creates a new task in contexts that have one.
+
+    - Outside an event loop: uses ``asyncio.run()``.
+    - Inside a running event loop (e.g. called from sync code under ASGI):
+      runs the coroutine in a brand-new thread with its own event loop,
+      avoiding the "This event loop is already running" error.
     """
     if not is_async(func):
         return func
@@ -73,11 +76,15 @@ def ensure_sync(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
-            loop = asyncio.get_running_loop()
-            # We're inside an async context — run in executor
-            future = asyncio.ensure_future(func(*args, **kwargs))
-            return loop.run_until_complete(future)
+            asyncio.get_running_loop()
+            # There is a running loop — we cannot call run_until_complete or
+            # asyncio.run() here.  Spin up a fresh thread with its own loop.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(asyncio.run, func(*args, **kwargs))
+                return fut.result()
         except RuntimeError:
+            # No running event loop in this thread — safe to use asyncio.run().
             return asyncio.run(func(*args, **kwargs))
 
     return wrapper
@@ -93,7 +100,7 @@ def ensure_async(func: Callable) -> Callable:
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
     return wrapper
@@ -137,7 +144,7 @@ async def _async_count(qs) -> int:
     if hasattr(qs, "acount"):
         return await qs.acount()
     # Fallback: run sync count in executor
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, qs.count)
 
 
@@ -147,7 +154,7 @@ async def _async_slice(qs, start: int, end: int) -> list:
     if hasattr(sliced, "__aiter__"):
         return [item async for item in sliced]
     # Fallback: sync slice in executor
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, list, sliced)
 
 
@@ -220,7 +227,7 @@ def async_rate_limit(
 
             backend = _get_backend()
             # Run the potentially sync backend in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             allowed, remaining, retry_after = await loop.run_in_executor(
                 None, backend.is_allowed, bucket_key, limit, window
             )
@@ -261,7 +268,7 @@ def async_require(*permissions, message: str = "Permission denied.", status: int
                     if is_async(perm.__call__):
                         allowed = await perm(request, ctx)
                     else:
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         allowed = await loop.run_in_executor(None, perm, request, ctx)
                 except HttpError:
                     raise

@@ -126,17 +126,17 @@ def verify_webhook(
             payload = json.loads(request.body)
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+        import asyncio as _asyncio
+
+        def _verify(request, ctx: dict) -> None:
+            """Run verification checks, raising HttpError on failure."""
             sig_header = request.headers.get(header, "")
             if not sig_header:
                 logger.warning("Webhook: missing %s header from %s", header, ctx.get("ip"))
                 raise HttpError(400, "Missing webhook signature header.")
-
             resolved_secret = _get_secret(secret, secret_env)
             expected = _hmac_digest(resolved_secret, request.body, algorithm)
             received = sig_header.removeprefix(prefix).removeprefix(f"{algorithm}=")
-
             if not _safe_compare(expected, received):
                 logger.warning(
                     "Webhook: signature mismatch from %s [path=%s]",
@@ -144,6 +144,16 @@ def verify_webhook(
                 )
                 raise HttpError(401, "Invalid webhook signature.")
 
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                _verify(request, ctx)
+                return await func(request, ctx, *args, **kwargs)
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            _verify(request, ctx)
             return func(request, ctx, *args, **kwargs)
         return wrapper
     return decorator
@@ -172,36 +182,48 @@ def stripe_webhook(
             ...
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+        import asyncio as _asyncio
+
+        def _verify(request, ctx: dict) -> None:
             sig_header = request.headers.get("Stripe-Signature", "")
             if not sig_header:
                 raise HttpError(400, "Missing Stripe-Signature header.")
-
-            # Parse the header: t=timestamp,v1=sig1,v1=sig2,...
-            parts = dict(p.split("=", 1) for p in sig_header.split(",") if "=" in p)
-            ts    = parts.get("t")
-            sigs  = [v for k, v in parts.items() if k == "v1"]
-
+            ts = None
+            sigs = []
+            for part in sig_header.split(","):
+                if "=" not in part:
+                    continue
+                key, _, value = part.partition("=")
+                key = key.strip()
+                if key == "t":
+                    ts = value.strip()
+                elif key == "v1":
+                    sigs.append(value.strip())
             if not ts or not sigs:
                 raise HttpError(400, "Malformed Stripe-Signature header.")
-
-            # Replay attack protection
             try:
                 ts_int = int(ts)
                 if abs(time.time() - ts_int) > tolerance:
                     raise HttpError(400, "Webhook timestamp too old — possible replay attack.")
             except ValueError:
                 raise HttpError(400, "Invalid Stripe-Signature timestamp.")
-
             resolved_secret = _get_secret(secret, secret_env)
             signed_payload  = f"{ts}.".encode() + request.body
             expected = _hmac_digest(resolved_secret, signed_payload, "sha256")
-
             if not any(_safe_compare(expected, sig) for sig in sigs):
                 logger.warning("Stripe webhook: signature mismatch from %s", ctx.get("ip"))
                 raise HttpError(401, "Invalid Stripe webhook signature.")
 
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                _verify(request, ctx)
+                return await func(request, ctx, *args, **kwargs)
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            _verify(request, ctx)
             return func(request, ctx, *args, **kwargs)
         return wrapper
     return decorator
@@ -255,29 +277,36 @@ def slack_webhook(
         def handle_slack(request, ctx): ...
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+        import asyncio as _asyncio
+
+        def _verify(request, ctx: dict) -> None:
             timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
             sig_header = request.headers.get("X-Slack-Signature", "")
-
             if not timestamp or not sig_header:
                 raise HttpError(400, "Missing Slack signature headers.")
-
             try:
                 ts_int = int(timestamp)
                 if abs(time.time() - ts_int) > tolerance:
                     raise HttpError(400, "Slack webhook: timestamp too old.")
             except ValueError:
                 raise HttpError(400, "Invalid Slack-Request-Timestamp.")
-
             resolved_secret = _get_secret(signing_secret, secret_env)
             basestring = f"v0:{timestamp}:".encode() + request.body
             expected = "v0=" + _hmac_digest(resolved_secret, basestring, "sha256")
-
             if not _safe_compare(expected, sig_header):
                 logger.warning("Slack webhook: signature mismatch from %s", ctx.get("ip"))
                 raise HttpError(401, "Invalid Slack webhook signature.")
 
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                _verify(request, ctx)
+                return await func(request, ctx, *args, **kwargs)
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            _verify(request, ctx)
             return func(request, ctx, *args, **kwargs)
         return wrapper
     return decorator

@@ -29,12 +29,14 @@ Quick start::
     def delete_order(request, ctx, id: int): ...
 
     # Option 2: AuditRouter — audits every operation automatically
-    router = AuditRouter(resource="order", tags=["Orders"])
+    #   Pass the underlying router as the first argument.
+    from ninja_boost import AutoRouter
+    audit_router = AuditRouter(AutoRouter(tags=["Orders"]), resource="order")
 
-    @router.get("/")       # logs: order.list
+    @audit_router.get("/")       # logs: order.list
     def list_orders(request, ctx): ...
 
-    @router.delete("/{id}")  # logs: order.delete, resource_id=id
+    @audit_router.delete("/{id}")  # logs: order.delete, resource_id=id
     def delete_order(request, ctx, id: int): ...
 
     # Option 3: manual emit (inside a view or service)
@@ -77,8 +79,7 @@ Database storage (optional)::
         }
     }
 
-    # Run migration to create the audit table:
-    python manage.py migrate
+    # The audit table is auto-created on first write — no migration required.
 
 Custom backends::
 
@@ -160,14 +161,99 @@ class DatabaseBackend:
     """
     Write audit records to the database via Django's ORM.
 
-    Requires running ``python manage.py migrate`` after adding ninja_boost
-    to INSTALLED_APPS (the migration creates the ``ninja_boost_audit_log`` table).
+    Auto-creates the ``ninja_boost_audit_log`` table on first write — no
+    migration step required.  The table uses only standard SQL types that
+    work across all Django-supported databases (SQLite, PostgreSQL, MySQL).
 
-    This is a forward reference — the actual model is defined in
-    ``ninja_boost.models`` (auto-created if AUDIT.BACKEND is set to this class).
+    Usage::
+
+        NINJA_BOOST = {
+            "AUDIT": {
+                "BACKEND": "ninja_boost.audit.DatabaseBackend",
+            }
+        }
     """
 
+    _table_ensured: bool = False
+    _DDL = """
+        CREATE TABLE IF NOT EXISTS ninja_boost_audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            actor_id    TEXT,
+            actor_type  TEXT,
+            resource    TEXT,
+            resource_id TEXT,
+            outcome     TEXT,
+            ip          TEXT,
+            trace_id    TEXT,
+            path        TEXT,
+            method      TEXT,
+            metadata    TEXT
+        )
+    """
+    # PostgreSQL: SERIAL for auto-increment
+    _DDL_PG = """
+        CREATE TABLE IF NOT EXISTS ninja_boost_audit_log (
+            id          SERIAL PRIMARY KEY,
+            timestamp   TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            actor_id    TEXT,
+            actor_type  TEXT,
+            resource    TEXT,
+            resource_id TEXT,
+            outcome     TEXT,
+            ip          TEXT,
+            trace_id    TEXT,
+            path        TEXT,
+            method      TEXT,
+            metadata    TEXT
+        )
+    """
+    # MySQL / MariaDB: AUTO_INCREMENT
+    _DDL_MYSQL = """
+        CREATE TABLE IF NOT EXISTS ninja_boost_audit_log (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            timestamp   TEXT    NOT NULL,
+            action      TEXT    NOT NULL,
+            actor_id    TEXT,
+            actor_type  TEXT,
+            resource    TEXT,
+            resource_id TEXT,
+            outcome     TEXT,
+            ip          TEXT,
+            trace_id    TEXT,
+            path        TEXT,
+            method      TEXT,
+            metadata    TEXT
+        )
+    """
+
+    def _ensure_table(self) -> None:
+        """Create the audit table if it does not already exist."""
+        if DatabaseBackend._table_ensured:
+            return
+        try:
+            from django.db import connection
+            vendor = getattr(connection, "vendor", "sqlite")
+            if vendor == "postgresql":
+                ddl = self._DDL_PG
+            elif vendor in ("mysql", "mariadb"):
+                ddl = self._DDL_MYSQL
+            else:
+                ddl = self._DDL  # SQLite and others
+            with connection.cursor() as cursor:
+                cursor.execute(ddl)
+            DatabaseBackend._table_ensured = True
+        except Exception:
+            logger.warning(
+                "DatabaseBackend: failed to auto-create audit table — "
+                "check database permissions or create it manually.",
+                exc_info=True,
+            )
+
     def write(self, record: dict) -> None:
+        self._ensure_table()
         try:
             from django.db import connection
             with connection.cursor() as cursor:
@@ -378,47 +464,82 @@ def audit_log(
     """
     import asyncio
 
+    def _should_skip_request(request) -> bool:
+        """
+        Return True if this request should NOT be audited.
+
+        Logic:
+          - skip_reads=True  → always skip GET requests
+          - skip_reads=False → never skip (always audit, even GETs)
+          - skip_reads=None  → fall back to AUDIT.LOG_READS setting:
+                               skip GET when log_reads is False (the default)
+        """
+        is_read = getattr(request, "method", "").upper() == "GET"
+        if not is_read:
+            return False  # only reads can be skipped
+        if skip_reads is True:
+            return True
+        if skip_reads is False:
+            return False
+        # None → use the global LOG_READS setting (skip reads when it's False)
+        return not audit_logger.log_reads()
+
     def decorator(func: Callable) -> Callable:
         if asyncio.iscoroutinefunction(func):
             @wraps(func)
             async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
-                resource_id = None
+                result = await func(request, ctx, *args, **kwargs)
+                if not _should_skip_request(request):
+                    resource_id = _resolve_id(
+                        resource_id_from, resource_id_fn,
+                        request, ctx, result, kwargs,
+                    )
+                    meta = {}
+                    if metadata_fn is not None:
+                        try:
+                            meta = metadata_fn(request, ctx, result, **kwargs) or {}
+                        except Exception:
+                            pass
+                    _write(request, ctx, action, resource, resource_id, "success", meta, kwargs)
+                return result
+
+            @wraps(func)
+            async def async_wrapper_with_failure(request, ctx: dict, *args, **kwargs) -> Any:
                 outcome = "success"
                 result  = None
                 try:
                     result = await func(request, ctx, *args, **kwargs)
-                except Exception as exc:
+                except Exception:
                     outcome = "error"
-                    if log_on_failure:
-                        _write(request, ctx, action, resource, None,
-                               outcome, {}, kwargs)
+                    if not _should_skip_request(request):
+                        _write(request, ctx, action, resource, None, outcome, {}, kwargs)
                     raise
-                finally:
-                    if outcome == "success":
-                        resource_id = _resolve_id(
-                            resource_id_from, resource_id_fn,
-                            request, ctx, result, kwargs,
-                        )
-                        meta = {}
-                        if metadata_fn is not None:
-                            try:
-                                meta = metadata_fn(request, ctx, result, **kwargs) or {}
-                            except Exception:
-                                pass
-                        _write(request, ctx, action, resource, resource_id, outcome, meta, kwargs)
+                if not _should_skip_request(request):
+                    resource_id = _resolve_id(
+                        resource_id_from, resource_id_fn,
+                        request, ctx, result, kwargs,
+                    )
+                    meta = {}
+                    if metadata_fn is not None:
+                        try:
+                            meta = metadata_fn(request, ctx, result, **kwargs) or {}
+                        except Exception:
+                            pass
+                    _write(request, ctx, action, resource, resource_id, outcome, meta, kwargs)
                 return result
-            return async_wrapper
 
-        @wraps(func)
-        def sync_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            return async_wrapper_with_failure if log_on_failure else async_wrapper
+
+        # ── Sync path ──────────────────────────────────────────────────────
+
+        def _sync_core(request, ctx, args, kwargs):
+            """Run the view and return (result, outcome, resource_id, meta)."""
             outcome = "success"
             result  = None
             try:
                 result = func(request, ctx, *args, **kwargs)
             except Exception:
                 outcome = "error"
-                if log_on_failure:
-                    _write(request, ctx, action, resource, None, outcome, {}, kwargs)
                 raise
             resource_id = _resolve_id(
                 resource_id_from, resource_id_fn,
@@ -430,8 +551,30 @@ def audit_log(
                     meta = metadata_fn(request, ctx, result, **kwargs) or {}
                 except Exception:
                     pass
-            _write(request, ctx, action, resource, resource_id, outcome, meta, kwargs)
-            return result
+            return result, outcome, resource_id, meta
+
+        if log_on_failure:
+            @wraps(func)
+            def sync_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                outcome = "success"
+                result  = None
+                try:
+                    result, outcome, resource_id, meta = _sync_core(request, ctx, args, kwargs)
+                except Exception:
+                    if not _should_skip_request(request):
+                        _write(request, ctx, action, resource, None, "error", {}, kwargs)
+                    raise
+                if not _should_skip_request(request):
+                    _write(request, ctx, action, resource, resource_id, outcome, meta, kwargs)
+                return result
+        else:
+            @wraps(func)
+            def sync_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                result, outcome, resource_id, meta = _sync_core(request, ctx, args, kwargs)
+                if not _should_skip_request(request):
+                    _write(request, ctx, action, resource, resource_id, outcome, meta, kwargs)
+                return result
+
         return sync_wrapper
 
     return decorator

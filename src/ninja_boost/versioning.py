@@ -83,11 +83,11 @@ def require_version(
     Clients that send a different version (or no header) receive 400.
     Use in combination with URL versioning for header-based negotiation.
     """
+    import asyncio as _asyncio
     from ninja.errors import HttpError
 
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, *args, **kwargs) -> Any:
+        def _check(request) -> None:
             req_version = get_request_version(request, header)
             if req_version != version:
                 msg = error_message or (
@@ -95,6 +95,18 @@ def require_version(
                     f"You sent: {req_version or '(none)'}."
                 )
                 raise HttpError(400, msg)
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, *args, **kwargs) -> Any:
+                _check(request)
+                return await func(request, *args, **kwargs)
+            async_wrapper._required_version = version
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, *args, **kwargs) -> Any:
+            _check(request)
             return func(request, *args, **kwargs)
         wrapper._required_version = version
         return wrapper
@@ -121,13 +133,27 @@ def deprecated(sunset: str | None = None, replacement: str | None = None):
         Link: <https://api.example.com/v2/users>; rel="successor-version"
     """
     def decorator(func: Callable) -> Callable:
+        import asyncio as _asyncio
+
+        def _tag(request) -> None:
+            request._deprecation_sunset      = sunset
+            request._deprecation_replacement = replacement
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, *args, **kwargs) -> Any:
+                result = await func(request, *args, **kwargs)
+                _tag(request)
+                return result
+            async_wrapper._deprecated   = True
+            async_wrapper._sunset       = sunset
+            async_wrapper._replacement  = replacement
+            return async_wrapper
+
         @wraps(func)
         def wrapper(request, *args, **kwargs) -> Any:
             result = func(request, *args, **kwargs)
-            # Django Ninja doesn't give us the response object here; we use a middleware
-            # trick: attach deprecation info to the request for post-processing
-            request._deprecation_sunset      = sunset
-            request._deprecation_replacement = replacement
+            _tag(request)
             return result
 
         wrapper._deprecated    = True
@@ -148,18 +174,38 @@ class DeprecationMiddleware:
             "ninja_boost.versioning.DeprecationMiddleware",
         ]
     """
+
+    async_capable = True
+    sync_capable  = True
+
     def __init__(self, get_response):
+        import asyncio
         self.get_response = get_response
+        self._is_async    = asyncio.iscoroutinefunction(get_response)
 
     def __call__(self, request):
+        if self._is_async:
+            return self.__acall__(request)
+        return self._sync_call(request)
+
+    def _sync_call(self, request):
         response = self.get_response(request)
+        self._set_headers(request, response)
+        return response
+
+    async def __acall__(self, request):
+        response = await self.get_response(request)
+        self._set_headers(request, response)
+        return response
+
+    @staticmethod
+    def _set_headers(request, response) -> None:
         if getattr(request, "_deprecation_sunset", None) or getattr(request, "_deprecation_replacement", None):
             response["Deprecation"] = "true"
             if request._deprecation_sunset:
                 response["Sunset"] = request._deprecation_sunset
             if request._deprecation_replacement:
                 response["Link"] = f'<{request._deprecation_replacement}>; rel="successor-version"'
-        return response
 
 
 # ── VersionedRouter ───────────────────────────────────────────────────────

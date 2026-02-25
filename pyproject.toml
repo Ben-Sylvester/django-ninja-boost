@@ -21,6 +21,7 @@ classifiers = [
     "Framework :: Django",
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -43,7 +44,7 @@ dependencies = [
 prometheus = ["prometheus_client>=0.16"]
 statsd     = ["statsd>=4.0"]
 redis      = ["django-redis>=5.0"]
-async      = ["uvicorn>=0.20", "anyio>=3.0"]
+async      = ["uvicorn>=0.20"]
 dev = [
     "pytest>=7.0",
     "pytest-django>=4.5",

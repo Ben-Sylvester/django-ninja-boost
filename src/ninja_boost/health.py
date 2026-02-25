@@ -80,7 +80,6 @@ import time
 from typing import Any, Callable
 
 from ninja import Router
-from ninja.responses import Response
 
 logger = logging.getLogger("ninja_boost.health")
 
@@ -178,11 +177,14 @@ def liveness(request) -> dict:
 
 
 @health_router.get("/ready", auth=None)
-def readiness(request) -> Any:
+def readiness(request):
     """
     Readiness probe — runs all registered health checks.
     Returns 200 (healthy/degraded) or 503 (unhealthy).
     Use this for Kubernetes readinessProbe.
+
+    This endpoint bypasses the AutoAPI response envelope intentionally —
+    health check clients expect the raw payload, not {"ok": true, "data": {...}}.
     """
     results: dict[str, dict] = {}
     overall  = "healthy"
@@ -198,8 +200,8 @@ def readiness(request) -> Any:
         elif result["status"] == "degraded" and overall == "healthy":
             overall = "degraded"
 
-    from django.http import JsonResponse
     import json
+    from django.http import HttpResponse
 
     try:
         from ninja_boost import __version__ as _version
@@ -214,7 +216,13 @@ def readiness(request) -> Any:
     }
 
     status_code = 503 if not all_pass else 200
-    return JsonResponse(payload, status=status_code)
+    # Return a plain HttpResponse with content_type set so Django Ninja
+    # passes it through without attempting to re-serialize or envelope it.
+    return HttpResponse(
+        json.dumps(payload, default=str),
+        content_type="application/json",
+        status=status_code,
+    )
 
 
 @health_router.get("/", auth=None)

@@ -234,13 +234,25 @@ def inject_service(*service_names: str):
             orders = ctx["svc_orders"].recent()
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+        import asyncio as _asyncio
+
+        def _inject(ctx, request):
             for name in service_names:
                 try:
                     ctx[f"svc_{name}"] = service_registry.get(name, request, ctx)
                 except KeyError as e:
                     logger.error("inject_service: %s", e)
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                _inject(ctx, request)
+                return await func(request, ctx, *args, **kwargs)
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            _inject(ctx, request)
             return func(request, ctx, *args, **kwargs)
         return wrapper
     return decorator

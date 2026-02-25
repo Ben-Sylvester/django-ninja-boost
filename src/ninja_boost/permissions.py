@@ -222,7 +222,7 @@ class IsOwner(BasePermission):
         user = ctx.get("user")
         if user is None:
             return False
-        uid = user.get("id") or user.get("user_id") if isinstance(user, dict) else getattr(user, "id", None)
+        uid = (user.get("id") or user.get("user_id")) if isinstance(user, dict) else getattr(user, "id", None)
         try:
             owner_id = self._get_owner_id(request, ctx, **path_kwargs)
             return str(uid) == str(owner_id)

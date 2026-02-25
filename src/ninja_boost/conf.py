@@ -71,7 +71,8 @@ _NON_IMPORT_KEYS = {"RATE_LIMIT", "METRICS", "DOCS", "PLUGINS", "POLICIES", "SER
 class BoostSettings:
     """Lazy proxy around NINJA_BOOST that falls back to built-in defaults."""
 
-    _cache: dict = {}
+    def __init__(self):
+        self._cache: dict = {}
 
     def _resolve(self, key: str):
         if key not in self._cache:

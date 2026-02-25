@@ -20,6 +20,7 @@ class NinjaBoostConfig(AppConfig):
     name = "ninja_boost"
     verbose_name = "Django Ninja Boost"
     default_auto_field = "django.db.models.BigAutoField"
+    default = True  # Makes this the default AppConfig (Django 3.2+, replaces module-level default_app_config)
 
     def ready(self):
         from django.conf import settings
@@ -127,5 +128,3 @@ class NinjaBoostConfig(AppConfig):
         except Exception:
             logger.debug("Default event handler wiring failed", exc_info=True)
 
-
-default_app_config = "ninja_boost.apps.NinjaBoostConfig"

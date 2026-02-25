@@ -135,6 +135,7 @@ def create_jwt_token(payload: dict, expires_minutes: int | None = None) -> str:
     minutes = expires_minutes or getattr(djsettings, "JWT_EXPIRY_MINS", 60)
 
     data = dict(payload)
-    data["exp"] = datetime.datetime.utcnow() + datetime.timedelta(minutes=minutes)
-    data["iat"] = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    data["exp"] = now + datetime.timedelta(minutes=minutes)
+    data["iat"] = now
     return _jwt.encode(data, secret, algorithm=algo)

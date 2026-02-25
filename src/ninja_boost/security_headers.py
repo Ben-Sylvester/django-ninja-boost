@@ -156,6 +156,8 @@ class SecurityHeadersMiddleware:
         cfg = _settings()
         if not _should_skip(request.path, cfg.get("SKIP_PATHS", [])):
             _apply_headers(response, cfg)
+        # Apply per-view header overrides set by @with_headers decorator
+        _apply_extra_headers(request, response)
         return response
 
     async def __acall__(self, request):
@@ -163,7 +165,22 @@ class SecurityHeadersMiddleware:
         cfg = _settings()
         if not _should_skip(request.path, cfg.get("SKIP_PATHS", [])):
             _apply_headers(response, cfg)
+        # Apply per-view header overrides set by @with_headers decorator
+        _apply_extra_headers(request, response)
         return response
+
+
+def _apply_extra_headers(request, response) -> None:
+    """
+    Apply per-view header overrides stored by the ``@with_headers`` decorator.
+
+    The decorator stores ``{header: value}`` on ``request._boost_extra_headers``.
+    These override (or extend) the global security headers set by the middleware.
+    """
+    extra = getattr(request, "_boost_extra_headers", None)
+    if extra:
+        for key, value in extra.items():
+            response[key] = value
 
 
 def _apply_headers(response, cfg: dict) -> None:

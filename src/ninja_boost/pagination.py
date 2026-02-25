@@ -174,6 +174,65 @@ def cursor_paginate(field: str = "id", order: str = "asc"):
         # Second page: GET /events?cursor=<next_cursor from first page>
     """
     def decorator(func):
+        import asyncio as _asyncio
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, *args, **kwargs) -> Any:
+                from ninja_boost.async_support import _async_slice
+                result = await func(request, *args, **kwargs)
+
+                if result is None or isinstance(result, dict):
+                    return result
+
+                size = _safe_int(request.GET.get("size"), default=DEFAULT_PAGE_SIZE,
+                                 minimum=1, maximum=MAX_PAGE_SIZE)
+                cursor_token = request.GET.get("cursor")
+                cursor_data  = _decode_cursor(cursor_token) if cursor_token else None
+
+                if _is_queryset(result):
+                    qs = result
+                    if cursor_data:
+                        cursor_val = cursor_data.get("v")
+                        if order == "asc":
+                            qs = qs.filter(**{f"{field}__gt": cursor_val})
+                        else:
+                            qs = qs.filter(**{f"{field}__lt": cursor_val})
+
+                    items = await _async_slice(qs, 0, size + 1)
+                    has_next = len(items) > size
+                    if has_next:
+                        items = items[:size]
+
+                    has_prev = bool(cursor_data)
+                    next_cursor = _encode_cursor({"v": getattr(items[-1], field)}) if has_next and items else None
+                    prev_cursor = _encode_cursor({"v": getattr(items[0], field), "dir": "prev"}) if has_prev and items else None
+                else:
+                    start = cursor_data.get("i", 0) if cursor_data else 0
+                    all_items = list(result)
+                    chunk = all_items[start:start + size + 1]
+                    has_next = len(chunk) > size
+                    if has_next:
+                        chunk = chunk[:size]
+                    items = chunk
+                    has_prev = start > 0
+                    next_cursor = _encode_cursor({"i": start + size}) if has_next else None
+                    prev_cursor = _encode_cursor({"i": max(0, start - size)}) if has_prev else None
+
+                return {
+                    "items":       items,
+                    "next_cursor": next_cursor,
+                    "prev_cursor": prev_cursor,
+                    "size":        size,
+                    "has_next":    has_next,
+                    "has_prev":    has_prev,
+                }
+
+            async_wrapper._cursor_paginated = True
+            async_wrapper._cursor_field     = field
+            async_wrapper._cursor_order     = order
+            return async_wrapper
+
         @wraps(func)
         def wrapper(request, *args, **kwargs) -> Any:
             result = func(request, *args, **kwargs)

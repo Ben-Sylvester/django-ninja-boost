@@ -329,7 +329,7 @@ def main() -> None:
 
     {"startproject": cmd_startproject,
      "startapp":     cmd_startapp,
-     "config":       lambda: cmd_config()}.get(
+     "config":       lambda _=None: cmd_config()}.get(
         args.command,
         lambda *_: parser.print_help()
     )(getattr(args, "name", None))

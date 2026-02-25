@@ -123,14 +123,17 @@ class EventBus:
         for handler in self._handlers.get(event, []) + self._wildcard:
             try:
                 if asyncio.iscoroutinefunction(handler):
-                    # Run async handlers synchronously via a new event loop
+                    # Schedule async handlers from synchronous emit().
+                    # get_running_loop() raises RuntimeError if there is no
+                    # running loop in this thread, which is the common case
+                    # when emit() is called from Django's sync request cycle.
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            loop.create_task(handler(event=event, **kwargs))
-                        else:
-                            loop.run_until_complete(handler(event=event, **kwargs))
+                        loop = asyncio.get_running_loop()
+                        # There IS a running loop (e.g. ASGI / async test) —
+                        # schedule the coroutine on it; fire-and-forget.
+                        loop.create_task(handler(event=event, **kwargs))
                     except RuntimeError:
+                        # No running loop — safe to call asyncio.run().
                         asyncio.run(handler(event=event, **kwargs))
                 else:
                     handler(event=event, **kwargs)

@@ -197,7 +197,72 @@ def idempotent(
     _methods = [m.upper() for m in (methods or ["POST", "PATCH"])]
 
     def decorator(func: Callable) -> Callable:
+        import asyncio as _asyncio
         func_name = f"{func.__module__}.{func.__qualname__}"
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                if request.method.upper() not in _methods:
+                    return await func(request, ctx, *args, **kwargs)
+
+                header_name = (header or _header_name()).upper().replace("-", "_")
+                ikey = request.META.get(f"HTTP_{header_name}")
+                if not ikey:
+                    return await func(request, ctx, *args, **kwargs)
+
+                user_id      = _extract_user_id(ctx)
+                cache_key    = _build_cache_key(ikey, user_id, scope, func_name)
+                lock_key     = f"{cache_key}:lock"
+                resolved_ttl = _parse_ttl(ttl) if ttl is not None else _default_ttl()
+                cache        = _cache()
+
+                try:
+                    stored = cache.get(cache_key)
+                    if stored is not None and stored != _LOCK_SENTINEL:
+                        logger.debug("Idempotency replay: key=%s func=%s", ikey[:8], func_name)
+                        request._idempotency_replay = True
+                        request._idempotency_key    = ikey
+                        return json.loads(stored)
+                except Exception:
+                    logger.debug("Idempotency cache GET failed", exc_info=True)
+
+                try:
+                    lock_acquired = cache.add(lock_key, _LOCK_SENTINEL, timeout=_lock_ttl())
+                    if not lock_acquired:
+                        raise HttpError(
+                            409,
+                            "A request with this idempotency key is already in progress. "
+                            "Please retry after a moment.",
+                        )
+                except HttpError:
+                    raise
+                except Exception:
+                    logger.debug("Idempotency lock check failed — proceeding without lock", exc_info=True)
+                    lock_acquired = False
+
+                try:
+                    result = await func(request, ctx, *args, **kwargs)
+                except Exception:
+                    raise
+                finally:
+                    if lock_acquired:
+                        try:
+                            cache.delete(lock_key)
+                        except Exception:
+                            pass
+
+                try:
+                    cache.set(cache_key, json.dumps(result, default=str), timeout=resolved_ttl)
+                    request._idempotency_key = ikey
+                except Exception:
+                    logger.debug("Idempotency cache SET failed", exc_info=True)
+
+                return result
+
+            async_wrapper._idempotent     = True
+            async_wrapper._idempotent_ttl = ttl
+            return async_wrapper
 
         @wraps(func)
         def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
@@ -295,14 +360,33 @@ class IdempotencyMiddleware:
         X-Idempotency-Key: <the-key>
     """
 
+    async_capable = True
+    sync_capable  = True
+
     def __init__(self, get_response):
+        import asyncio as _asyncio
         self.get_response = get_response
+        self._is_async    = _asyncio.iscoroutinefunction(get_response)
 
     def __call__(self, request):
+        if self._is_async:
+            return self.__acall__(request)
+        return self._sync_call(request)
+
+    def _sync_call(self, request):
         response = self.get_response(request)
+        self._set_headers(request, response)
+        return response
+
+    async def __acall__(self, request):
+        response = await self.get_response(request)
+        self._set_headers(request, response)
+        return response
+
+    @staticmethod
+    def _set_headers(request, response) -> None:
         if getattr(request, "_idempotency_replay", False):
             response["X-Idempotency-Replay"] = "true"
         key = getattr(request, "_idempotency_key", None)
         if key:
             response["X-Idempotency-Key"] = key
-        return response

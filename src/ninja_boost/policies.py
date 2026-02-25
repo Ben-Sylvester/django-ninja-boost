@@ -300,19 +300,32 @@ def policy(
         def delete_order(request, ctx, id: int): ...
     """
     def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+        import asyncio as _asyncio
+
+        def _authorize(request, ctx, kwargs):
             obj = None
             if get_obj is not None:
                 try:
                     obj = get_obj(**kwargs)
                 except Exception:
                     raise HttpError(404, "Resource not found.")
-
             policy_registry.authorize(
                 request, ctx, resource_name, action,
                 obj=obj, status=status, message=message,
             )
+
+        if _asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+                _authorize(request, ctx, kwargs)
+                return await func(request, ctx, *args, **kwargs)
+            async_wrapper._policy_resource = resource_name
+            async_wrapper._policy_action   = action
+            return async_wrapper
+
+        @wraps(func)
+        def wrapper(request, ctx: dict, *args, **kwargs) -> Any:
+            _authorize(request, ctx, kwargs)
             return func(request, ctx, *args, **kwargs)
 
         wrapper._policy_resource = resource_name

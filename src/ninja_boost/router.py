@@ -80,8 +80,12 @@ class AutoRouter(Router):
         try:
             from ninja_boost.rate_limiting import _get_global_rate, apply_global_rate_limit
             global_rate = _get_global_rate()
-            if global_rate and not is_async_view:
-                view_func = apply_global_rate_limit(view_func, global_rate)
+            if global_rate:
+                if is_async_view:
+                    from ninja_boost.async_support import async_rate_limit
+                    view_func = async_rate_limit(global_rate)(view_func)
+                else:
+                    view_func = apply_global_rate_limit(view_func, global_rate)
         except Exception:
             logger.debug("Global rate limit wiring skipped", exc_info=True)
 
