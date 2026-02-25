@@ -84,10 +84,10 @@ class JWTAuth(HttpBearer):
     def authenticate(self, request, token: str):
         try:
             import jwt as _jwt
-        except ImportError:
+        except ImportError as exc:
             raise RuntimeError(
                 "JWTAuth requires PyJWT. Install with: pip install PyJWT"
-            )
+            ) from exc
 
         from django.conf import settings as djsettings
         secret    = getattr(djsettings, "JWT_SECRET_KEY", djsettings.SECRET_KEY)
@@ -126,8 +126,8 @@ def create_jwt_token(payload: dict, expires_minutes: int | None = None) -> str:
     import datetime
     try:
         import jwt as _jwt
-    except ImportError:
-        raise RuntimeError("create_jwt_token requires PyJWT: pip install PyJWT")
+    except ImportError as exc:
+        raise RuntimeError("create_jwt_token requires PyJWT: pip install PyJWT") from exc
 
     from django.conf import settings as djsettings
     secret  = getattr(djsettings, "JWT_SECRET_KEY", djsettings.SECRET_KEY)

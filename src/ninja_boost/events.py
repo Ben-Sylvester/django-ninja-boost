@@ -44,7 +44,8 @@ Async handlers::
 import asyncio
 import logging
 from collections import defaultdict
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.events")
 
@@ -167,7 +168,7 @@ class EventBus:
                 *[h(event=event, **kwargs) for h in async_handlers],
                 return_exceptions=True,
             )
-            for result, handler in zip(results, async_handlers):
+            for result, handler in zip(results, async_handlers, strict=False):
                 if isinstance(result, Exception):
                     logger.exception("Async handler %s raised during emit '%s'",
                                      getattr(handler, "__qualname__", repr(handler)), event,

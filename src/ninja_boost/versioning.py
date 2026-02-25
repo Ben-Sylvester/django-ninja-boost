@@ -54,8 +54,9 @@ Deprecation warnings::
 """
 
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja_boost.router import AutoRouter
 
@@ -83,7 +84,7 @@ def require_version(
     Clients that send a different version (or no header) receive 400.
     Use in combination with URL versioning for header-based negotiation.
     """
-    import asyncio as _asyncio
+    import asyncio as _asyncio  # noqa: I001
     from ninja.errors import HttpError
 
     def decorator(func: Callable) -> Callable:
@@ -200,7 +201,9 @@ class DeprecationMiddleware:
 
     @staticmethod
     def _set_headers(request, response) -> None:
-        if getattr(request, "_deprecation_sunset", None) or getattr(request, "_deprecation_replacement", None):
+        has_sunset = getattr(request, "_deprecation_sunset", None)
+        has_replacement = getattr(request, "_deprecation_replacement", None)
+        if has_sunset or has_replacement:
             response["Deprecation"] = "true"
             if request._deprecation_sunset:
                 response["Sunset"] = request._deprecation_sunset

@@ -54,11 +54,12 @@ Environment-variable secret loading::
 
 import hashlib
 import hmac
+import logging
 import os
 import time
-import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja.errors import HttpError
 
@@ -205,8 +206,8 @@ def stripe_webhook(
                 ts_int = int(ts)
                 if abs(time.time() - ts_int) > tolerance:
                     raise HttpError(400, "Webhook timestamp too old — possible replay attack.")
-            except ValueError:
-                raise HttpError(400, "Invalid Stripe-Signature timestamp.")
+            except ValueError as exc:
+                raise HttpError(400, "Invalid Stripe-Signature timestamp.") from exc
             resolved_secret = _get_secret(secret, secret_env)
             signed_payload  = f"{ts}.".encode() + request.body
             expected = _hmac_digest(resolved_secret, signed_payload, "sha256")
@@ -288,8 +289,8 @@ def slack_webhook(
                 ts_int = int(timestamp)
                 if abs(time.time() - ts_int) > tolerance:
                     raise HttpError(400, "Slack webhook: timestamp too old.")
-            except ValueError:
-                raise HttpError(400, "Invalid Slack-Request-Timestamp.")
+            except ValueError as exc:
+                raise HttpError(400, "Invalid Slack-Request-Timestamp.") from exc
             resolved_secret = _get_secret(signing_secret, secret_env)
             basestring = f"v0:{timestamp}:".encode() + request.body
             expected = "v0=" + _hmac_digest(resolved_secret, basestring, "sha256")

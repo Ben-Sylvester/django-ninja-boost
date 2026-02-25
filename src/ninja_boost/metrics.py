@@ -55,8 +55,9 @@ Custom metrics::
 import logging
 import threading
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.metrics")
 
@@ -97,11 +98,20 @@ class LoggingBackend(BaseMetricsBackend):
     def _emit(self, kind: str, name: str, value: Any, labels: dict | None) -> None:
         self._log.log(self._level, "metric %s %s=%s labels=%s", kind, name, value, labels or {})
 
-    def increment(self, name, value=1, labels=None):   self._emit("counter++", name, value, labels)
-    def decrement(self, name, value=1, labels=None):   self._emit("counter--", name, value, labels)
-    def gauge(self, name, value, labels=None):          self._emit("gauge",   name, value, labels)
-    def timing(self, name, value_ms, labels=None):      self._emit("timing",  name, f"{value_ms:.2f}ms", labels)
-    def histogram(self, name, value, labels=None):      self._emit("hist",    name, value, labels)
+    def increment(self, name, value=1, labels=None):
+        self._emit("counter++", name, value, labels)
+
+    def decrement(self, name, value=1, labels=None):
+        self._emit("counter--", name, value, labels)
+
+    def gauge(self, name, value, labels=None):
+        self._emit("gauge", name, value, labels)
+
+    def timing(self, name, value_ms, labels=None):
+        self._emit("timing", name, f"{value_ms:.2f}ms", labels)
+
+    def histogram(self, name, value, labels=None):
+        self._emit("hist", name, value, labels)
 
 
 # ── Prometheus backend ────────────────────────────────────────────────────
@@ -124,11 +134,11 @@ class PrometheusBackend(BaseMetricsBackend):
     def __init__(self, namespace: str = "ninja_boost"):
         try:
             import prometheus_client as prom
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "PrometheusBackend requires prometheus_client. "
                 "Install it with: pip install prometheus_client"
-            )
+            ) from exc
         self._prom = prom
         self._ns   = namespace
         self._counters:    dict = {}
@@ -219,10 +229,10 @@ class StatsDBackend(BaseMetricsBackend):
         try:
             import statsd
             self._client = statsd.StatsClient(host, port, prefix=prefix)
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "StatsDBackend requires statsd. Install with: pip install statsd"
-            )
+            ) from exc
 
     def _key(self, name: str, labels: dict | None) -> str:
         if not labels:
@@ -269,14 +279,14 @@ class DatadogBackend(BaseMetricsBackend):
     def __init__(self, prefix: str = "ninja_boost",
                  host: str = "localhost", port: int = 8125):
         try:
-            from datadog import initialize, statsd as dd_statsd
+            from datadog import initialize, statsd as dd_statsd  # noqa: I001
             initialize(statsd_host=host, statsd_port=port)
             self._statsd = dd_statsd
-        except ImportError:
+        except ImportError as exc:
             raise ImportError(
                 "DatadogBackend requires the datadog package. "
                 "Install it with: pip install datadog"
-            )
+            ) from exc
         self._prefix = prefix
 
     def _key(self, name: str, labels: dict | None) -> str:
@@ -344,7 +354,7 @@ class Metrics:
                 cls = import_string(dotted)
                 ns  = mc.get("NAMESPACE") or mc.get("PREFIX", "ninja_boost")
                 # Pass the configured namespace/prefix to the backend constructor.
-                # PrometheusBackend and LoggingBackend use "namespace="; StatsDBackend uses "prefix=".
+                # PrometheusBackend/LoggingBackend use "namespace="; StatsDBackend uses "prefix=".
                 try:
                     params = inspect.signature(cls.__init__).parameters
                 except (ValueError, TypeError):
@@ -362,32 +372,42 @@ class Metrics:
     def increment(self, name: str, value: int = 1, labels: dict | None = None) -> None:
         b = self._get_backend()
         if b:
-            try: b.increment(name, value, labels)
-            except Exception: logger.debug("metrics.increment failed", exc_info=True)
+            try:
+                b.increment(name, value, labels)
+            except Exception:
+                logger.debug("metrics.increment failed", exc_info=True)
 
     def decrement(self, name: str, value: int = 1, labels: dict | None = None) -> None:
         b = self._get_backend()
         if b:
-            try: b.decrement(name, value, labels)
-            except Exception: logger.debug("metrics.decrement failed", exc_info=True)
+            try:
+                b.decrement(name, value, labels)
+            except Exception:
+                logger.debug("metrics.decrement failed", exc_info=True)
 
     def gauge(self, name: str, value: float, labels: dict | None = None) -> None:
         b = self._get_backend()
         if b:
-            try: b.gauge(name, value, labels)
-            except Exception: logger.debug("metrics.gauge failed", exc_info=True)
+            try:
+                b.gauge(name, value, labels)
+            except Exception:
+                logger.debug("metrics.gauge failed", exc_info=True)
 
     def timing(self, name: str, value_ms: float, labels: dict | None = None) -> None:
         b = self._get_backend()
         if b:
-            try: b.timing(name, value_ms, labels)
-            except Exception: logger.debug("metrics.timing failed", exc_info=True)
+            try:
+                b.timing(name, value_ms, labels)
+            except Exception:
+                logger.debug("metrics.timing failed", exc_info=True)
 
     def histogram(self, name: str, value: float, labels: dict | None = None) -> None:
         b = self._get_backend()
         if b:
-            try: b.histogram(name, value, labels)
-            except Exception: logger.debug("metrics.histogram failed", exc_info=True)
+            try:
+                b.histogram(name, value, labels)
+            except Exception:
+                logger.debug("metrics.histogram failed", exc_info=True)
 
     def track_request_start(self) -> None:
         with self._lock:
@@ -403,8 +423,10 @@ class Metrics:
         self.timing("request_duration_ms", duration_ms,
                     labels={"method": method, "path": _normalize_path(path)})
         if status >= 400:
-            self.increment("request_errors_total",
-                           labels={"method": method, "path": _normalize_path(path), "status": str(status)})
+            self.increment(
+                "request_errors_total",
+                labels={"method": method, "path": _normalize_path(path), "status": str(status)},
+            )
 
     def timer(self, name: str, labels: dict | None = None):
         """Context manager that records elapsed time."""

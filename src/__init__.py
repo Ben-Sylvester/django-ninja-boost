@@ -24,107 +24,149 @@ Basic usage::
 __version__ = "0.2.0"
 
 # ── Core ──────────────────────────────────────────────────────────────────
-from ninja_boost.api          import AutoAPI
-from ninja_boost.router       import AutoRouter
+from ninja_boost.api import AutoAPI
+
+# ── Async support ─────────────────────────────────────────────────────────
+from ninja_boost.async_support import (
+    AsyncTracingMiddleware,
+    async_inject_context,
+    async_paginate,
+    async_rate_limit,
+    async_require,
+)
+
+# ── Audit logging ─────────────────────────────────────────────────────────
+from ninja_boost.audit import (
+    AuditLogger,
+    AuditRecord,
+    AuditRouter,
+    audit_log,
+    audit_logger,
+)
+from ninja_boost.audit import (
+    emit as audit_emit,
+)
+
+# ── Response caching ──────────────────────────────────────────────────────
+from ninja_boost.caching import cache_manager, cache_response
 from ninja_boost.dependencies import inject_context
-from ninja_boost.exceptions   import register_exception_handlers
-from ninja_boost.middleware   import TracingMiddleware
-from ninja_boost.pagination   import auto_paginate, cursor_paginate
-from ninja_boost.responses    import wrap_response
+
+# ── Docs ──────────────────────────────────────────────────────────────────
+from ninja_boost.docs import (
+    DocGuard,
+    add_rate_limit_headers_to_schema,
+    add_security_scheme,
+    harden_docs,
+)
 
 # ── Events ────────────────────────────────────────────────────────────────
 from ninja_boost.events import (
-    EventBus, event_bus,
-    BEFORE_REQUEST, AFTER_RESPONSE, ON_ERROR,
-    ON_AUTH_FAILURE, ON_RATE_LIMIT_EXCEEDED, ON_PERMISSION_DENIED,
-    ON_POLICY_DENIED, ON_SERVICE_REGISTERED, ON_PLUGIN_LOADED,
+    AFTER_RESPONSE,
+    BEFORE_REQUEST,
+    ON_AUTH_FAILURE,
+    ON_ERROR,
+    ON_PERMISSION_DENIED,
+    ON_PLUGIN_LOADED,
+    ON_POLICY_DENIED,
+    ON_RATE_LIMIT_EXCEEDED,
+    ON_SERVICE_REGISTERED,
+    EventBus,
+    event_bus,
+)
+from ninja_boost.exceptions import register_exception_handlers
+
+# ── Health checks ─────────────────────────────────────────────────────────
+from ninja_boost.health import health_router, register_check
+
+# ── Idempotency ───────────────────────────────────────────────────────────
+from ninja_boost.idempotency import IdempotencyMiddleware, idempotent
+
+# ── JWT auth ──────────────────────────────────────────────────────────────
+from ninja_boost.integrations import BearerTokenAuth, JWTAuth, create_jwt_token
+
+# ── Lifecycle ─────────────────────────────────────────────────────────────
+from ninja_boost.lifecycle import LifecycleMiddleware, lifecycle_hooks
+
+# ── Structured logging ────────────────────────────────────────────────────
+from ninja_boost.logging_structured import (
+    StructuredJsonFormatter,
+    StructuredLoggingMiddleware,
+    StructuredVerboseFormatter,
+    bind_request_context,
+    clear_request_context,
+    get_request_context,
+)
+
+# ── Metrics ───────────────────────────────────────────────────────────────
+from ninja_boost.metrics import (
+    BaseMetricsBackend,
+    LoggingBackend,
+    Metrics,
+    PrometheusBackend,
+    StatsDBackend,
+    metrics,
+    track,
+)
+from ninja_boost.middleware import TracingMiddleware
+from ninja_boost.pagination import auto_paginate, cursor_paginate
+
+# ── Permissions ───────────────────────────────────────────────────────────
+from ninja_boost.permissions import (
+    AllowAny,
+    BasePermission,
+    DenyAll,
+    HasPermission,
+    IsAuthenticated,
+    IsOwner,
+    IsStaff,
+    IsSuperuser,
+    require,
+    require_async,
 )
 
 # ── Plugins ───────────────────────────────────────────────────────────────
 from ninja_boost.plugins import BoostPlugin, PluginRegistry, plugin_registry
 
-# ── Rate limiting ─────────────────────────────────────────────────────────
-from ninja_boost.rate_limiting import rate_limit, InMemoryBackend, CacheBackend
-
-# ── Permissions ───────────────────────────────────────────────────────────
-from ninja_boost.permissions import (
-    BasePermission, require, require_async,
-    IsAuthenticated, IsStaff, IsSuperuser, AllowAny, DenyAll,
-    HasPermission, IsOwner,
-)
-
 # ── Policies ──────────────────────────────────────────────────────────────
-from ninja_boost.policies import BasePolicy, PolicyRegistry, policy_registry, policy
+from ninja_boost.policies import BasePolicy, PolicyRegistry, policy, policy_registry
 
-# ── Services ──────────────────────────────────────────────────────────────
-from ninja_boost.services import (
-    BoostService, ServiceRegistry, service_registry,
-    enrich_ctx_with_services, inject_service,
-)
-
-# ── Metrics ───────────────────────────────────────────────────────────────
-from ninja_boost.metrics import (
-    Metrics, metrics, track,
-    BaseMetricsBackend, LoggingBackend, PrometheusBackend, StatsDBackend,
-)
-
-# ── Structured logging ────────────────────────────────────────────────────
-from ninja_boost.logging_structured import (
-    StructuredJsonFormatter, StructuredVerboseFormatter,
-    StructuredLoggingMiddleware,
-    bind_request_context, get_request_context, clear_request_context,
-)
-
-# ── Async support ─────────────────────────────────────────────────────────
-from ninja_boost.async_support import (
-    async_inject_context, async_paginate,
-    async_rate_limit, async_require,
-    AsyncTracingMiddleware,
-)
-
-# ── Lifecycle ─────────────────────────────────────────────────────────────
-from ninja_boost.lifecycle import LifecycleMiddleware, lifecycle_hooks
-
-# ── Docs ──────────────────────────────────────────────────────────────────
-from ninja_boost.docs import (
-    DocGuard, harden_docs,
-    add_security_scheme, add_rate_limit_headers_to_schema,
-)
-
-# ── Health checks ─────────────────────────────────────────────────────────
-from ninja_boost.health import health_router, register_check
-
-# ── Response caching ──────────────────────────────────────────────────────
-from ninja_boost.caching import cache_response, cache_manager
+# ── Rate limiting ─────────────────────────────────────────────────────────
+from ninja_boost.rate_limiting import CacheBackend, InMemoryBackend, rate_limit
+from ninja_boost.responses import wrap_response
+from ninja_boost.router import AutoRouter
 
 # ── Security headers ──────────────────────────────────────────────────────
 from ninja_boost.security_headers import (
-    SecurityHeadersMiddleware, with_headers, security_report,
+    SecurityHeadersMiddleware,
+    security_report,
+    with_headers,
 )
 
-# ── Audit logging ─────────────────────────────────────────────────────────
-from ninja_boost.audit import (
-    AuditRecord, AuditLogger, audit_logger,
-    audit_log, emit as audit_emit, AuditRouter,
+# ── Services ──────────────────────────────────────────────────────────────
+from ninja_boost.services import (
+    BoostService,
+    ServiceRegistry,
+    enrich_ctx_with_services,
+    inject_service,
+    service_registry,
 )
 
 # ── API versioning ────────────────────────────────────────────────────────
 from ninja_boost.versioning import (
-    VersionedRouter, versioned_api,
-    require_version, deprecated,
     DeprecationMiddleware,
+    VersionedRouter,
+    deprecated,
+    require_version,
+    versioned_api,
 )
-
-# ── Idempotency ───────────────────────────────────────────────────────────
-from ninja_boost.idempotency import idempotent, IdempotencyMiddleware
 
 # ── Webhook verification ──────────────────────────────────────────────────
 from ninja_boost.webhook import (
-    verify_webhook, stripe_webhook, github_webhook, slack_webhook,
+    github_webhook,
+    slack_webhook,
+    stripe_webhook,
+    verify_webhook,
 )
-
-# ── JWT auth ──────────────────────────────────────────────────────────────
-from ninja_boost.integrations import BearerTokenAuth, JWTAuth, create_jwt_token
 
 __all__ = [
     # Core

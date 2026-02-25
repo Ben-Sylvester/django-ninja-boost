@@ -1,0 +1,2 @@
+[console_scripts]
+ninja-boost = ninja_boost.cli:main

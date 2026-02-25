@@ -1,5 +1,5 @@
-from ninja import Schema   # Capital S — was UserCreate(schema) in original template
-from typing import Optional
+
+from ninja import Schema  # Capital S — was UserCreate(schema) in original template
 
 
 class UserOut(Schema):
@@ -15,5 +15,5 @@ class UserCreate(Schema):      # Bug fix: was `class UserCreate(schema):` — un
 
 
 class UserUpdate(Schema):
-    username: Optional[str] = None
-    email: Optional[str] = None
+    username: str | None = None
+    email: str | None = None

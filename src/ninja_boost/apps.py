@@ -20,7 +20,7 @@ class NinjaBoostConfig(AppConfig):
     name = "ninja_boost"
     verbose_name = "Django Ninja Boost"
     default_auto_field = "django.db.models.BigAutoField"
-    default = True  # Makes this the default AppConfig (Django 3.2+, replaces module-level default_app_config)
+    default = True  # Default AppConfig (Django 3.2+)
 
     def ready(self):
         from django.conf import settings
@@ -90,7 +90,7 @@ class NinjaBoostConfig(AppConfig):
         These are low-overhead and safe to enable unconditionally.
         """
         try:
-            from ninja_boost.events import event_bus, BEFORE_REQUEST, AFTER_RESPONSE, ON_ERROR
+            from ninja_boost.events import AFTER_RESPONSE, BEFORE_REQUEST, ON_ERROR, event_bus
 
             # Structured logging: bind context on every request
             @event_bus.on(BEFORE_REQUEST)

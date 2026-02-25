@@ -47,16 +47,17 @@ Global rate limiting via settings::
 Per-route overrides always win over the global default.
 """
 
-import time
 import hashlib
 import logging
 import threading
+import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja.errors import HttpError
 
-from ninja_boost.events import event_bus, ON_RATE_LIMIT_EXCEEDED
+from ninja_boost.events import ON_RATE_LIMIT_EXCEEDED, event_bus
 
 logger = logging.getLogger("ninja_boost.rate_limit")
 
@@ -77,10 +78,10 @@ def _parse_rate(rate: str) -> tuple[int, int]:
         count  = int(count_str.strip())
         window = _PERIOD_SECONDS[period.strip()]
         return count, window
-    except (ValueError, KeyError):
+    except (ValueError, KeyError) as exc:
         raise ValueError(
             f"Invalid rate string '{rate}'. Expected format: 'N/second|minute|hour|day'"
-        )
+        ) from exc
 
 
 # ── Backends ───────────────────────────────────────────────────────────────
@@ -220,7 +221,10 @@ def _resolve_key(key_spec: str | Callable | None, request, ctx: dict) -> str:
         return str(key_spec(request, ctx))
     if key_spec == "user":
         user = ctx.get("user") or {}
-        uid  = (user.get("id") or user.get("user_id")) if isinstance(user, dict) else getattr(user, "id", None)
+        uid = (
+            (user.get("id") or user.get("user_id"))
+            if isinstance(user, dict) else getattr(user, "id", None)
+        )
         if uid is None:
             # Fall back to IP for anonymous users
             return f"ip:{ctx.get('ip', 'unknown')}"

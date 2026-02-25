@@ -48,11 +48,13 @@ Global default via settings::
 """
 
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja.errors import HttpError
-from ninja_boost.events import event_bus, ON_PERMISSION_DENIED
+
+from ninja_boost.events import ON_PERMISSION_DENIED, event_bus
 
 logger = logging.getLogger("ninja_boost.permissions")
 
@@ -222,7 +224,10 @@ class IsOwner(BasePermission):
         user = ctx.get("user")
         if user is None:
             return False
-        uid = (user.get("id") or user.get("user_id")) if isinstance(user, dict) else getattr(user, "id", None)
+        uid = (
+            (user.get("id") or user.get("user_id"))
+            if isinstance(user, dict) else getattr(user, "id", None)
+        )
         try:
             owner_id = self._get_owner_id(request, ctx, **path_kwargs)
             return str(uid) == str(owner_id)

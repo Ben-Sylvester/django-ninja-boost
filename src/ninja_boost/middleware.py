@@ -54,7 +54,7 @@ class TracingMiddleware:
         # Emit after_response for any handlers registered directly on the event bus
         # (LifecycleMiddleware provides this more completely if installed)
         try:
-            from ninja_boost.events import event_bus, AFTER_RESPONSE
+            from ninja_boost.events import AFTER_RESPONSE, event_bus
             event_bus.emit(
                 AFTER_RESPONSE,
                 request=request,

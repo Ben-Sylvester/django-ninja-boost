@@ -1,5 +1,6 @@
 from ninja_boost import AutoRouter
-from .schemas import UserOut, UserCreate
+
+from .schemas import UserCreate, UserOut
 from .services import UserService
 
 router = AutoRouter(tags=["Users"])

@@ -59,10 +59,11 @@ Scoped services (per-request instantiation)::
 """
 
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Type
+from typing import Any
 
-from ninja_boost.events import event_bus, ON_SERVICE_REGISTERED
+from ninja_boost.events import ON_SERVICE_REGISTERED, event_bus
 
 logger = logging.getLogger("ninja_boost.services")
 
@@ -105,11 +106,11 @@ class ServiceRegistry:
     """
 
     def __init__(self):
-        self._services: dict[str, BoostService | Type[BoostService]] = {}
+        self._services: dict[str, BoostService | type[BoostService]] = {}
 
     # ── Registration ──────────────────────────────────────────────────────
 
-    def register(self, service: BoostService | Type[BoostService]) -> "ServiceRegistry":
+    def register(self, service: BoostService | type[BoostService]) -> "ServiceRegistry":
         """
         Register a service instance or class.
 
@@ -171,7 +172,7 @@ class ServiceRegistry:
         Scoped services are freshly instantiated. Singletons are shared.
         """
         result = {}
-        for name, svc in self._services.items():
+        for name, _svc in self._services.items():
             try:
                 result[name] = self.get(name, request=request, ctx=ctx)
             except Exception:

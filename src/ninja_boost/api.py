@@ -35,6 +35,7 @@ import logging
 from typing import Any
 
 from ninja import NinjaAPI
+
 from ninja_boost.conf import boost_settings
 
 logger = logging.getLogger("ninja_boost.api")

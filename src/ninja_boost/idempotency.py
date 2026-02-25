@@ -75,9 +75,9 @@ Configuration::
 import hashlib
 import json
 import logging
-import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja.errors import HttpError
 
@@ -238,7 +238,10 @@ def idempotent(
                 except HttpError:
                     raise
                 except Exception:
-                    logger.debug("Idempotency lock check failed — proceeding without lock", exc_info=True)
+                    logger.debug(
+                        "Idempotency lock check failed — proceeding without lock",
+                        exc_info=True,
+                    )
                     lock_acquired = False
 
                 try:
@@ -310,7 +313,10 @@ def idempotent(
             except HttpError:
                 raise
             except Exception:
-                logger.debug("Idempotency lock check failed — proceeding without lock", exc_info=True)
+                logger.debug(
+                    "Idempotency lock check failed — proceeding without lock",
+                    exc_info=True,
+                )
                 lock_acquired = False
 
             try:

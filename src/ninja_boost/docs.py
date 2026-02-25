@@ -49,8 +49,9 @@ Settings reference::
 
 import ipaddress
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.docs")
 
@@ -176,7 +177,7 @@ def _patch_docs_views(api: Any, guard: DocGuard) -> None:
     NinjaAPI exposes get_openapi_schema, docs_view, and redoc_view as methods
     on the instance. We wrap them to enforce the guard.
     """
-    from django.http import HttpResponseNotFound, HttpResponseForbidden
+    from django.http import HttpResponseForbidden, HttpResponseNotFound
 
     def _guarded(original_view, request, *args, **kwargs):
         if not guard.is_allowed(request):
@@ -216,12 +217,16 @@ def _enrich_openapi(api: Any) -> None:
     docs = cfg.get("DOCS", {})
 
     if docs.get("TITLE"):
-        try: api.title = docs["TITLE"]
-        except AttributeError: pass
+        try:
+            api.title = docs["TITLE"]
+        except AttributeError:
+            pass
 
     if docs.get("VERSION"):
-        try: api.version = docs["VERSION"]
-        except AttributeError: pass
+        try:
+            api.version = docs["VERSION"]
+        except AttributeError:
+            pass
 
     extra_desc = docs.get("DESCRIPTION", "")
     if extra_desc:
@@ -232,8 +237,10 @@ def _enrich_openapi(api: Any) -> None:
             pass
 
     if docs.get("SERVERS"):
-        try: api.servers = docs["SERVERS"]
-        except AttributeError: pass
+        try:
+            api.servers = docs["SERVERS"]
+        except AttributeError:
+            pass
 
 
 # ── OpenAPI schema hooks ──────────────────────────────────────────────────

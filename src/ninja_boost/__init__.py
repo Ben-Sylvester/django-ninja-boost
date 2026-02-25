@@ -23,6 +23,8 @@ Basic usage::
 
 __version__ = "0.2.0"
 
+# ruff: noqa: I001  — imports are grouped by feature, not sorted alphabetically
+
 # ── Core ──────────────────────────────────────────────────────────────────
 from ninja_boost.api          import AutoAPI
 from ninja_boost.router       import AutoRouter

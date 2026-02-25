@@ -57,8 +57,9 @@ Configuration::
 
 import hashlib
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.caching")
 
@@ -71,8 +72,8 @@ def _is_queryset(obj) -> bool:
 
 
 def _get_cache():
-    from django.core.cache import caches
     from django.conf import settings
+    from django.core.cache import caches
     cfg     = getattr(settings, "NINJA_BOOST", {})
     alias   = cfg.get("CACHE", {}).get("BACKEND", "default")
     return caches[alias]
@@ -95,7 +96,10 @@ def _build_key(key_spec: str | Callable | None, request, ctx: dict, func) -> str
         raw = key_spec(request, ctx)
     elif key_spec == "user":
         user = ctx.get("user") or {}
-        uid  = (user.get("id") or user.get("user_id")) if isinstance(user, dict) else getattr(user, "id", None)
+        uid = (
+            (user.get("id") or user.get("user_id"))
+            if isinstance(user, dict) else getattr(user, "id", None)
+        )
         raw  = f"{func.__qualname__}:user:{uid}"
     elif key_spec == "path":
         raw = f"{func.__qualname__}:path:{request.path}"

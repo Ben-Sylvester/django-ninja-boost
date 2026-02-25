@@ -47,7 +47,7 @@ def register_exception_handlers(api) -> None:
         )
         # Fire on_error event for plugins / Sentry / alerting
         try:
-            from ninja_boost.events import event_bus, ON_ERROR
+            from ninja_boost.events import ON_ERROR, event_bus
             ctx = {
                 "trace_id": getattr(request, "trace_id", None),
                 "ip":       request.META.get("REMOTE_ADDR"),

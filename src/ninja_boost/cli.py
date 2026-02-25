@@ -22,7 +22,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 # ── Starter code templates ─────────────────────────────────────────────────
 
 SETTINGS_BLOCK = textwrap.dedent("""\

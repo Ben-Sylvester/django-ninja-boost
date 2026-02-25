@@ -46,7 +46,7 @@ def inject_context(func):
 
         # Fire before_request event
         try:
-            from ninja_boost.events import event_bus, BEFORE_REQUEST
+            from ninja_boost.events import BEFORE_REQUEST, event_bus
             event_bus.emit(BEFORE_REQUEST, request=request, ctx=ctx)
         except Exception:
             pass

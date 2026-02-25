@@ -45,9 +45,9 @@ Set DJANGO_SETTINGS_MODULE and use an ASGI server (uvicorn, daphne)::
 
 import asyncio
 import logging
-import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from ninja.errors import HttpError
 
@@ -165,7 +165,7 @@ def async_paginate(func: Callable) -> Callable:
     Uses Django 4.1+ async ORM methods (acount, async iteration).
     Falls back to thread executor for older Django versions.
     """
-    from ninja_boost.pagination import _safe_int, _is_queryset, MAX_PAGE_SIZE, DEFAULT_PAGE_SIZE
+    from ninja_boost.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, _is_queryset, _safe_int
 
     @wraps(func)
     async def wrapper(request, *args, **kwargs) -> Any:
@@ -214,8 +214,8 @@ def async_rate_limit(
         @async_rate_limit("5/minute", key="user")
         async def stream(request, ctx): ...
     """
-    from ninja_boost.rate_limiting import _parse_rate, _resolve_key, _get_backend
-    from ninja_boost.events import event_bus, ON_RATE_LIMIT_EXCEEDED
+    from ninja_boost.events import ON_RATE_LIMIT_EXCEEDED, event_bus
+    from ninja_boost.rate_limiting import _get_backend, _parse_rate, _resolve_key
 
     limit, window = _parse_rate(rate)
 
@@ -258,7 +258,7 @@ def async_require(*permissions, message: str = "Permission denied.", status: int
         @async_require(IsStaff)
         async def admin_view(request, ctx): ...
     """
-    from ninja_boost.events import event_bus, ON_PERMISSION_DENIED
+    from ninja_boost.events import ON_PERMISSION_DENIED, event_bus
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -338,8 +338,8 @@ class AsyncTracingMiddleware:
         return self._sync_call(request)
 
     def _sync_call(self, request):
-        import uuid
         import logging as _log
+        import uuid
         _logger = _log.getLogger("ninja_boost.tracing")
         trace_id = uuid.uuid4().hex
         request.trace_id = trace_id

@@ -66,7 +66,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 # ── Per-request context storage ───────────────────────────────────────────
-_request_ctx: ContextVar[dict] = ContextVar("ninja_boost_log_ctx", default={})
+_request_ctx: ContextVar[dict | None] = ContextVar("ninja_boost_log_ctx", default=None)
 
 
 def bind_request_context(request: Any, ctx: dict | None = None) -> None:
@@ -92,12 +92,12 @@ def bind_request_context(request: Any, ctx: dict | None = None) -> None:
 
 def get_request_context() -> dict:
     """Return the currently bound request context dict."""
-    return _request_ctx.get({})
+    return _request_ctx.get(None) or {}
 
 
 def clear_request_context() -> None:
     """Clear the request context (called at end of request lifecycle)."""
-    _request_ctx.set({})
+    _request_ctx.set(None)
 
 
 # ── JSON formatter ────────────────────────────────────────────────────────
@@ -170,7 +170,9 @@ class StructuredVerboseFormatter(logging.Formatter):
         trace  = ctx.get("trace_id", "")[:8] if ctx.get("trace_id") else "-"
         method = ctx.get("method", "")
         path   = ctx.get("path", "")
-        ts     = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        ts = datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
 
         line = f"{ts} {record.levelname:<7} [{trace}] {method} {path} — {record.message}"
 

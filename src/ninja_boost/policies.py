@@ -63,11 +63,13 @@ Auto-loading from settings::
 """
 
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable, Type
+from typing import Any
 
 from ninja.errors import HttpError
-from ninja_boost.events import event_bus, ON_POLICY_DENIED
+
+from ninja_boost.events import ON_POLICY_DENIED, event_bus
 
 logger = logging.getLogger("ninja_boost.policies")
 
@@ -82,7 +84,7 @@ class BasePolicy:
     registry. It defaults to the class name without the word "Policy".
     """
     resource_name: str = ""
-    resource: Type | None = None
+    resource: type | None = None
 
     def _default_name(self) -> str:
         name = type(self).__name__
@@ -307,8 +309,8 @@ def policy(
             if get_obj is not None:
                 try:
                     obj = get_obj(**kwargs)
-                except Exception:
-                    raise HttpError(404, "Resource not found.")
+                except Exception as exc:
+                    raise HttpError(404, "Resource not found.") from exc
             policy_registry.authorize(
                 request, ctx, resource_name, action,
                 obj=obj, status=status, message=message,

@@ -43,6 +43,8 @@ Opt out per-route
         return ItemService.create(payload)   # single object, skip pagination
 """
 
+import base64
+import json
 from functools import wraps
 from typing import Any
 
@@ -103,9 +105,6 @@ def _is_queryset(obj) -> bool:
 
 
 # ── Cursor-based pagination ────────────────────────────────────────────────
-
-import base64
-import json
 
 
 def _encode_cursor(data: dict) -> str:
@@ -205,8 +204,14 @@ def cursor_paginate(field: str = "id", order: str = "asc"):
                         items = items[:size]
 
                     has_prev = bool(cursor_data)
-                    next_cursor = _encode_cursor({"v": getattr(items[-1], field)}) if has_next and items else None
-                    prev_cursor = _encode_cursor({"v": getattr(items[0], field), "dir": "prev"}) if has_prev and items else None
+                    next_cursor = (
+                        _encode_cursor({"v": getattr(items[-1], field)})
+                        if has_next and items else None
+                    )
+                    prev_cursor = (
+                        _encode_cursor({"v": getattr(items[0], field), "dir": "prev"})
+                        if has_prev and items else None
+                    )
                 else:
                     start = cursor_data.get("i", 0) if cursor_data else 0
                     all_items = list(result)
@@ -262,8 +267,14 @@ def cursor_paginate(field: str = "id", order: str = "asc"):
                     items = items[:size]
 
                 has_prev = bool(cursor_data)
-                next_cursor = _encode_cursor({"v": getattr(items[-1], field)}) if has_next and items else None
-                prev_cursor = _encode_cursor({"v": getattr(items[0], field), "dir": "prev"}) if has_prev and items else None
+                next_cursor = (
+                    _encode_cursor({"v": getattr(items[-1], field)})
+                    if has_next and items else None
+                )
+                prev_cursor = (
+                    _encode_cursor({"v": getattr(items[0], field), "dir": "prev"})
+                    if has_prev and items else None
+                )
 
             else:
                 # List fallback: simple slice with cursor as index

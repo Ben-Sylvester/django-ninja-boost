@@ -48,9 +48,9 @@ Decorator application order (innermost first, outermost called first):
 
 import asyncio
 import logging
-from typing import Any
 
 from ninja import Router
+
 from ninja_boost.conf import boost_settings
 
 logger = logging.getLogger("ninja_boost.router")

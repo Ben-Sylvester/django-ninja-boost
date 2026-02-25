@@ -54,7 +54,7 @@ Full reference::
     }
 """
 
-from django.utils.module_loading import import_string
+from django.utils.module_loading import import_string  # noqa: I001
 
 
 DEFAULTS = {

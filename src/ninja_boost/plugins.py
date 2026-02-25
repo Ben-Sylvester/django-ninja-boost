@@ -54,8 +54,15 @@ Available hooks
 import logging
 from typing import Any
 
-from ninja_boost.events import event_bus, BEFORE_REQUEST, AFTER_RESPONSE, ON_ERROR
-from ninja_boost.events import ON_AUTH_FAILURE, ON_RATE_LIMIT_EXCEEDED, ON_PERMISSION_DENIED
+from ninja_boost.events import (
+    AFTER_RESPONSE,
+    BEFORE_REQUEST,
+    ON_AUTH_FAILURE,
+    ON_ERROR,
+    ON_PERMISSION_DENIED,
+    ON_RATE_LIMIT_EXCEEDED,
+    event_bus,
+)
 
 logger = logging.getLogger("ninja_boost.plugins")
 

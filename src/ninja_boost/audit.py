@@ -96,9 +96,10 @@ Custom backends::
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.audit")
 

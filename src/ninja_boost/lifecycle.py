@@ -46,8 +46,9 @@ The lifecycle can also be used as a per-view decorator::
 
 import logging
 import time
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger("ninja_boost.lifecycle")
 
@@ -143,7 +144,7 @@ def _before(request, ctx: dict) -> None:
 
     # 3. Fire event bus
     try:
-        from ninja_boost.events import event_bus, BEFORE_REQUEST
+        from ninja_boost.events import BEFORE_REQUEST, event_bus
         event_bus.emit(BEFORE_REQUEST, request=request, ctx=ctx)
     except Exception:
         logger.exception("before_request event raised")
@@ -173,7 +174,7 @@ def _after(request, ctx: dict, response, duration_ms: float) -> None:
 
     # 3. Fire event bus
     try:
-        from ninja_boost.events import event_bus, AFTER_RESPONSE
+        from ninja_boost.events import AFTER_RESPONSE, event_bus
         event_bus.emit(
             AFTER_RESPONSE,
             request=request,
@@ -186,7 +187,7 @@ def _after(request, ctx: dict, response, duration_ms: float) -> None:
 
     # 4. Write structured access log
     try:
-        from ninja_boost.logging_structured import request_logger, clear_request_context
+        from ninja_boost.logging_structured import clear_request_context, request_logger
         request_logger.log_response(request, response, duration_ms)
         clear_request_context()
     except Exception:
@@ -196,7 +197,7 @@ def _after(request, ctx: dict, response, duration_ms: float) -> None:
 def _on_error(request, ctx: dict, exc: Exception) -> None:
     """Fire on_error event bus hooks."""
     try:
-        from ninja_boost.events import event_bus, ON_ERROR
+        from ninja_boost.events import ON_ERROR, event_bus
         event_bus.emit(ON_ERROR, request=request, ctx=ctx, exc=exc)
     except Exception:
         logger.exception("on_error event raised")
@@ -234,7 +235,7 @@ def lifecycle_hooks(func: Callable) -> Callable:
                 raise
             duration_ms = (time.perf_counter() - start) * 1000
             # No response object available here — fire event with None
-            from ninja_boost.events import event_bus, AFTER_RESPONSE
+            from ninja_boost.events import AFTER_RESPONSE, event_bus
             event_bus.emit(AFTER_RESPONSE, request=request, ctx=ctx,
                            response=None, duration_ms=duration_ms)
             return result
@@ -251,7 +252,7 @@ def lifecycle_hooks(func: Callable) -> Callable:
             _on_error(request, ctx, exc)
             raise
         duration_ms = (time.perf_counter() - start) * 1000
-        from ninja_boost.events import event_bus, AFTER_RESPONSE
+        from ninja_boost.events import AFTER_RESPONSE, event_bus
         event_bus.emit(AFTER_RESPONSE, request=request, ctx=ctx,
                        response=None, duration_ms=duration_ms)
         return result

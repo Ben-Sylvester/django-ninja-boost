@@ -77,7 +77,7 @@ Response shape::
 
 import logging
 import time
-from typing import Any, Callable
+from collections.abc import Callable
 
 from ninja import Router
 
@@ -114,7 +114,6 @@ def register_check(name: str, critical: bool = True):
 
 
 def _run_check(check: dict) -> dict:
-    name = check["name"]
     start = time.perf_counter()
     try:
         check["fn"]()
@@ -201,6 +200,7 @@ def readiness(request):
             overall = "degraded"
 
     import json
+
     from django.http import HttpResponse
 
     try:

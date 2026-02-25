@@ -4,9 +4,7 @@ ninja_boost — core test suite.
 Each test class is labelled with the bug it covers or feature it validates.
 """
 
-import pytest
-from unittest.mock import MagicMock, PropertyMock
-
+from unittest.mock import MagicMock
 
 # ── responses ─────────────────────────────────────────────────────────────
 
@@ -72,16 +70,18 @@ class TestAutoPaginate:
         @auto_paginate
         def view(request): return list(range(5))
 
-        r = MagicMock(); r.GET = {"page": "bad", "size": "bad"}
+        r = MagicMock()
+        r.GET = {"page": "bad", "size": "bad"}
         assert view(r)["page"] == 1
 
     def test_size_capped_at_max(self):
-        from ninja_boost.pagination import auto_paginate, MAX_PAGE_SIZE
+        from ninja_boost.pagination import MAX_PAGE_SIZE, auto_paginate
 
         @auto_paginate
         def view(request): return list(range(5))
 
-        r = MagicMock(); r.GET = {"page": "1", "size": "99999"}
+        r = MagicMock() 
+        r.GET = {"page": "1", "size": "99999"}
         assert view(r)["size"] == MAX_PAGE_SIZE
 
     def test_queryset_uses_count_not_len(self):
@@ -89,7 +89,7 @@ class TestAutoPaginate:
         BUG FIX: original template used len(queryset) which loads the entire
         table into memory. We must call .count() instead.
         """
-        from ninja_boost.pagination import auto_paginate, _is_queryset
+        from ninja_boost.pagination import _is_queryset, auto_paginate
 
         qs = MagicMock()
         qs.count.return_value = 500
@@ -102,7 +102,8 @@ class TestAutoPaginate:
         @auto_paginate
         def view(request): return qs
 
-        r = MagicMock(); r.GET = {"page": "1", "size": "20"}
+        r = MagicMock()
+        r.GET = {"page": "1", "size": "20"}
         result = view(r)
 
         qs.count.assert_called_once()     # must use .count(), not len()
@@ -114,7 +115,8 @@ class TestAutoPaginate:
         @auto_paginate
         def view(request): return list(range(21))   # 21 items, size 10 → 3 pages
 
-        r = MagicMock(); r.GET = {"page": "1", "size": "10"}
+        r = MagicMock() 
+        r.GET = {"page": "1", "size": "10"}
         assert view(r)["pages"] == 3
 
 
